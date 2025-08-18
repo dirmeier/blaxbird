@@ -1,0 +1,81 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name =  "blaxbird"
+description = "A high-level API for building and training Flax NNX models."
+authors = [{name = "Simon Dirmeier", email = "simd@mailbox.org"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+keywords = []
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "einops>=0.8.1",
+    "grain",
+    "jax-ai-stack[tfds]",
+    "ml-collections>=1.1.0",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+all = []
+
+[dependency-groups]
+dev = [
+    "gitlint",
+    "jupyter",
+    "matplotlib>=3.10.5",
+    "pre-commit",
+    "pytest>=7.2.0",
+    "pytest-cov>=4.0.0",
+    "ruff",
+    "wandb>=0.21.1",
+]
+examples = [
+]
+
+[project.urls]
+Homepage = "https://github.com/dirmeier/blaxbird"
+
+[tool.setuptools]
+packages = ["blaxbird"]
+
+[tool.setuptools.dynamic]
+version = {attr = "blaxbird.__init__.__version__"}
+
+[tool.bandit]
+skips = ["B101", "B310"]
+
+[tool.mypy]
+show_error_codes = true
+no_implicit_optional = true
+
+[tool.pytest]
+addopts = "-v --doctest-modules --cov=./blaxbird --cov-report=xml"
+
+[tool.ruff]
+indent-width = 2
+line-length = 80
+exclude = ["*_test.py", "docs/**", "examples/**"]
+
+[tool.ruff.lint]
+select = ["ANN", "D", "E", "F", "W", "I001"]
+extend-select = [
+  "UP", "I", "PL", "S"
+]
+ignore = ["S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention= 'google'
+
+[tool.uv]
+upgrade-package = ["jax-ai-stack", "grain"]
