@@ -222,6 +222,26 @@ model, optimizer = restore_best(model, optimizer)
 model, optimizer = restore_last(model, optimizer)
 ```
 
+### Doing training
+
+After having defined train functions, hooks and shardings, you can train your model like this:
+
+```python
+train = train_fn(
+  fns=(train_step, val_step),
+  n_steps=n_steps,
+  eval_every_n_steps=eval_every_n_steps,
+  n_eval_batches=n_eval_batches,
+  shardings=(model_sharding, data_sharding),
+  hooks=hooks,
+  log_to_wandb=False,
+)
+train(jr.key(1), model, optimizer, train_itr, val_itr)
+```
+
+An self-contained example that also explains how the data loaders should look like can be found
+in [examples/mnist_classification](examples/mnist_classification).
+
 ## Installation
 
 To install the package from PyPI, call:
