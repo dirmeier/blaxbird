@@ -32,7 +32,7 @@ def _step_and_val_fns(fns):
 def train_fn(
   *,
   fns: tuple[Callable, Callable],
-  shardings: tuple[jax.NamedSharding, jax.NamedSharding],
+  shardings: tuple[jax.NamedSharding, jax.NamedSharding] | None = None,
   n_steps: int,
   eval_every_n_steps: int,
   n_eval_batches: int,
@@ -70,8 +70,8 @@ def train_fn(
       rng_key: a jax.random.key object
       model: a NNX model
       optimizer: a nnx.Optimizer object
-      train_itr: a data laoder
-      val_itr: a data laoder
+      train_itr: a data loader
+      val_itr: a data loader
     """
     # get train and val fns
     step_fn, eval_fn = _step_and_val_fns(fns)

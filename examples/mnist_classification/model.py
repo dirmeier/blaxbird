@@ -5,7 +5,7 @@ from flax import nnx
 
 
 class CNN(nnx.Module):
-  """Copy==pasted from the Flax documentation."""
+  """Copy-pasted from the Flax documentation."""
 
   def __init__(self, *, rngs: nnx.Rngs):
     self.conv1 = nnx.Conv(1, 32, kernel_size=(3, 3), rngs=rngs)
