@@ -7,9 +7,10 @@ from absl import logging
 from flax import nnx
 from jax import random as jr
 from jax.experimental import mesh_utils
-from model import CNN, train_step, val_step
 
 from blaxbird import get_default_checkpointer, train_fn
+
+from model import CNN, train_step, val_step
 
 
 def get_optimizer(model, lr=1e-4):
@@ -28,10 +29,10 @@ def get_sharding():
   return model_sharding, data_sharding
 
 
-def visualize_hook(val_iter, n_eval_frequency):
-  def hook_fn(metrics, val_iter, n_eval_frequency):
+def visualize_hook(val_iter, eval_every_n_steps):
+  def hook_fn(metrics, val_iter, eval_every_n_steps):
     def fn(step, *, model, **kwargs):
-      if step % n_eval_frequency != 0:
+      if step % eval_every_n_steps != 0:
         return
       batch = next(iter(val_iter))
       logits = model(batch["image"])
@@ -52,11 +53,11 @@ def visualize_hook(val_iter, n_eval_frequency):
     accuracy=nnx.metrics.Accuracy(),
     loss=nnx.metrics.Average("loss"),
   )
-  return hook_fn(metrics, val_iter, n_eval_frequency)
+  return hook_fn(metrics, val_iter, eval_every_n_steps)
 
 
-def get_hooks(val_itr, n_eval_frequency):
-  return [visualize_hook(val_itr, n_eval_frequency)]
+def get_hooks(val_itr, eval_every_n_steps):
+  return [visualize_hook(val_itr, eval_every_n_steps)]
 
 
 def get_train_and_val_itrs(rng_key, outfolder):

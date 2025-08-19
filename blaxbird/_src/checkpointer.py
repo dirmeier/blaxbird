@@ -9,10 +9,8 @@ from flax import nnx
 def get_default_checkpointer(
   outfolder: str,
   *,
-  save_every_n_steps: int = 1,
+  save_every_n_steps: int,
   max_to_keep: int = 5,
-  best_fn: Callable = lambda x: x["val/loss"],
-  best_mode: str = "min",
 ) -> tuple[Callable, Callable, Callable]:
   """Construct functions for checkpointing functionality.
 
@@ -20,17 +18,13 @@ def get_default_checkpointer(
     outfolder: a path specifying where checkpoints are stored
     save_every_n_steps: how often to store checkpoints
     max_to_keep: number of checkpoints to store before they get deleted
-    best_fn: function that maintains checkpoints using a specific criterion for
-      quality
-    best_mode:  use `min`, e.g., if your criterion is a loss function.
-      Use 'max' if the criterion is an ELBO or something.
 
   Returns:
     returns function to saev and restore checkpoints
   """
   checkpointer = ocp.PyTreeCheckpointer()
   options = ocp.CheckpointManagerOptions(
-    max_to_keep=max_to_keep, create=True, best_mode=best_mode, best_fn=best_fn
+    max_to_keep=max_to_keep, create=True, best_mode="min", best_fn=lambda x: x["val/loss"]
   )
   checkpoint_manager = ocp.CheckpointManager(
     os.path.join(outfolder, "best"),

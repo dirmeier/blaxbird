@@ -1,4 +1,4 @@
-"""fll: A high-level API for building and training Flax NNX models."""
+"""blaxbird: A high-level API for building and training Flax NNX models."""
 
 __version__ = "0.0.1"
 
