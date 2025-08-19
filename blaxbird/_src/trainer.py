@@ -1,5 +1,4 @@
 from collections.abc import Callable, Iterable
-from typing import Optional
 
 import grain.python as grain
 import jax
@@ -33,7 +32,7 @@ def _step_and_val_fns(fns):
 def train_fn(
   *,
   fns: tuple[Callable, Callable],
-  shardings: Optional[tuple[jax.NamedSharding, jax.NamedSharding]] = None,
+  shardings: tuple[jax.NamedSharding, jax.NamedSharding] | None = None,
   n_steps: int,
   eval_every_n_steps: int,
   n_eval_batches: int,

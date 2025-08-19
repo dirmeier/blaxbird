@@ -24,7 +24,10 @@ def get_default_checkpointer(
   """
   checkpointer = ocp.PyTreeCheckpointer()
   options = ocp.CheckpointManagerOptions(
-    max_to_keep=max_to_keep, create=True, best_mode="min", best_fn=lambda x: x["val/loss"]
+    max_to_keep=max_to_keep,
+    create=True,
+    best_mode="min",
+    best_fn=lambda x: x["val/loss"],
   )
   checkpoint_manager = ocp.CheckpointManager(
     os.path.join(outfolder, "best"),

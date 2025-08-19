@@ -14,7 +14,7 @@ Using `blaxbird` one can
 - distribute data and model weights over multiple processes or GPUs,
 - define hooks that are periodically called during training.
 
-## Example 
+## Example
 
 To use `blaxbird`, one only needs to define a model, a loss function, and train and validation step functions:
 ```python
@@ -50,8 +50,8 @@ model = CNN(rngs=nnx.rnglib.Rngs(jr.key(1)))
 optimizer = nnx.Optimizer(model, optax.adam(1e-4))
 
 train = train_fn(
-  fns=(train_step, val_step), 
-  n_steps=100, 
+  fns=(train_step, val_step),
+  n_steps=100,
   eval_every_n_steps=10,
   n_eval_batches=10
 )
@@ -109,7 +109,7 @@ To specify how data and model weights are distributed over devices and processes
 
 `shardings` is again specified by a tuple, one for the model sharding, the other for the data sharding.
 An example is shown below, where we only distributed the data over `num_devices` devices.
-You can, if you don't want to distribute anything, just set the argument to `None` or not specify it. 
+You can, if you don't want to distribute anything, just set the argument to `None` or not specify it.
 
 ```python
 def get_sharding():
@@ -140,7 +140,7 @@ def hook_fn(metrics, val_iter, hook_every_n_steps):
   def fn(step, *, model, **kwargs):
     if step % hook_every_n_steps != 0:
       return
-    for batch in val_iter:        
+    for batch in val_iter:
       logits = model(batch["image"])
       loss = optax.softmax_cross_entropy_with_integer_labels(
         logits=logits, labels=batch["label"]
@@ -159,17 +159,17 @@ metrics = nnx.MultiMetric(
   loss=nnx.metrics.Average("loss"),
 )
 hook =  hook_fn(metrics, val_iter, eval_every_n_steps)
-``` 
+```
 
 This creates a hook function `hook` that after `eval_every_n_steps` steps iterates over the validation set
-computes accuracy and loss, and then logs everything. 
+computes accuracy and loss, and then logs everything.
 
 To provide multiple hooks to the train function, just concatenate them in a list.
 
 #### A checkpointing `hook`
 
 We provide a convenient hook for checkpointing which can be constructed using
-`get_default_checkpointer`. The checkpointer saves both the last `k` checkpoints with the lowest 
+`get_default_checkpointer`. The checkpointer saves both the last `k` checkpoints with the lowest
 validation loss and the last training checkpoint.
 
 The signature of the hook is:
@@ -179,13 +179,13 @@ def get_default_checkpointer(
   outfolder: str,
   *,
   save_every_n_steps: int,
-  max_to_keep: int = 5,  
+  max_to_keep: int = 5,
 ) -> tuple[Callable, Callable, Callable]
 ```
 
 Its arguments are:
 - `outfolder`: a folder specifying where to store the checkpoints.
-- `save_every_n_steps`: after how many training steps to store a checkpoint. 
+- `save_every_n_steps`: after how many training steps to store a checkpoint.
 - `max_to_keep`: the number of checkpoints to keep before starting to remove old checkpoints (to not clog the device).
 
 For instance, you would construct the checkpointing function then like this:
