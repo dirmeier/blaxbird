@@ -20,8 +20,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "einops>=0.8.1",
-    "grain",
-    "jax-ai-stack[tfds]",
+    "jax-ai-stack",
     "ml-collections>=1.1.0",
 ]
 dynamic = ["version"]
@@ -41,6 +40,9 @@ dev = [
     "wandb>=0.21.1",
 ]
 examples = [
+    "tensorflow-datasets==4.9.6",
+    "tensorflow==2.17.1",
+    "protobuf==3.20.3"
 ]
 
 [project.urls]
@@ -65,7 +67,7 @@ addopts = "-v --doctest-modules --cov=./blaxbird --cov-report=xml"
 [tool.ruff]
 indent-width = 2
 line-length = 80
-exclude = ["*_test.py", "docs/**", "examples/**"]
+exclude = ["*_test.py", "docs/**"]
 
 [tool.ruff.lint]
 select = ["ANN", "D", "E", "F", "W", "I001"]
@@ -78,4 +80,4 @@ ignore = ["S101"]
 convention= 'google'
 
 [tool.uv]
-upgrade-package = ["jax-ai-stack", "grain"]
+upgrade-package = ["jax-ai-stack"]

@@ -14,7 +14,7 @@ class CNN(nnx.Module):
     self.conv2 = nnx.Conv(32, 64, kernel_size=(3, 3), rngs=rngs)
     self.batch_norm2 = nnx.BatchNorm(64, rngs=rngs)
     self.avg_pool = partial(nnx.avg_pool, window_shape=(2, 2), strides=(2, 2))
-    self.linear1 = nnx.Linear(3136, 256, rngs=rngs)
+    self.linear1 = nnx.Linear(4096, 256, rngs=rngs)
     self.dropout2 = nnx.Dropout(rate=0.025, rngs=rngs)
     self.linear2 = nnx.Linear(256, 10, rngs=rngs)
 

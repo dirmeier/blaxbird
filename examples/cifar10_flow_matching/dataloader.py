@@ -15,7 +15,7 @@ def data_loaders(
   split="train",
 ):
   datasets = tfds.load(
-    "mnist",
+    "cifar10",
     try_gcs=False,
     split=split,
     data_dir=outfolder,
@@ -35,25 +35,9 @@ def data_loaders(
   return itrs
 
 
-def _crop_resize(image, resolution):
-  h, w = tf.shape(image)[0], tf.shape(image)[1]
-  crop = tf.minimum(h, w)
-  image = image[
-    (h - crop) // 2 : (h + crop) // 2, (w - crop) // 2 : (w + crop) // 2
-  ]
-  image = tf.image.resize(
-    image,
-    size=(resolution, resolution),
-    antialias=True,
-    method=tf.image.ResizeMethod.BICUBIC,
-  )
-  return tf.cast(image, tf.float32)
-
-
 def as_iterable(rng_key, itr, batch_size, buffer_size, prefetch_size, shuffle):
   def process_fn(batch):
     img = tf.cast(batch["image"], tf.float32) / 255.0
-    img = _crop_resize(img, 32)
     img = 2.0 * img - 1.0
     return {"image": img, "label": batch["label"]}
 

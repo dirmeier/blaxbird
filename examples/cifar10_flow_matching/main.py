@@ -1,4 +1,3 @@
-import argparse
 import os
 
 import dataloader
@@ -8,7 +7,6 @@ from absl import logging
 from flax import nnx
 from jax import random as jr
 from jax.experimental import mesh_utils
-from model import CNN, train_step, val_step
 
 from blaxbird import get_default_checkpointer, train_fn
 
@@ -29,18 +27,17 @@ def get_sharding():
   return model_sharding, data_sharding
 
 
-def visualize_hook(val_iter, hook_every_n_steps):
-  def hook_fn(metrics, val_iter, hook_every_n_steps):
+def visualize_hook(val_iter, eval_every_n_steps):
+  def hook_fn(metrics, val_iter, eval_every_n_steps):
     def fn(step, *, model, **kwargs):
-      if step % hook_every_n_steps != 0:
+      if step % eval_every_n_steps != 0:
         return
-      for _, batch in zip(range(5), val_iter):
-        batch = next(iter(val_iter))
-        logits = model(batch["image"])
-        loss = optax.softmax_cross_entropy_with_integer_labels(
-          logits=logits, labels=batch["label"]
-        ).mean()
-        metrics.update(loss=loss, logits=logits, labels=batch["label"])
+      batch = next(iter(val_iter))
+      logits = model(batch["image"])
+      loss = optax.softmax_cross_entropy_with_integer_labels(
+        logits=logits, labels=batch["label"]
+      ).mean()
+      metrics.update(loss=loss, logits=logits, labels=batch["label"])
       if jax.process_index() == 0:
         curr_metrics = ", ".join(
           [f"{k}: {v}" for k, v in metrics.compute().items()]
@@ -54,7 +51,7 @@ def visualize_hook(val_iter, hook_every_n_steps):
     accuracy=nnx.metrics.Accuracy(),
     loss=nnx.metrics.Average("loss"),
   )
-  return hook_fn(metrics, val_iter, hook_every_n_steps)
+  return hook_fn(metrics, val_iter, eval_every_n_steps)
 
 
 def get_hooks(val_itr, eval_every_n_steps):
@@ -63,17 +60,15 @@ def get_hooks(val_itr, eval_every_n_steps):
 
 def get_train_and_val_itrs(rng_key, outfolder):
   return dataloader.data_loaders(
-    rng_key,
-    outfolder,
-    split=["train[:90%]", "train[90%:]"],
-    shuffle=[True, False],
+    rng_key, outfolder, split=["train[:90%]", "train[90%:]"]
   )
 
 
-def run(n_steps, eval_every_n_steps, n_eval_batches):
+def run():
   logging.set_verbosity(logging.INFO)
 
   outfolder = os.path.dirname(__file__)
+  n_steps, eval_every_n_steps, n_eval_batches = 10_000, 100, 20
   train_itr, val_itr = get_train_and_val_itrs(
     jr.key(0), os.path.join(outfolder, "data")
   )
@@ -102,9 +97,4 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
 
 
 if __name__ == "__main__":
-  parser = argparse.ArgumentParser()
-  parser.add_argument("--n-steps", type=int, default=1_000)
-  parser.add_argument("--eval-every-n-steps", type=int, default=50)
-  parser.add_argument("--n-eval-batches", type=int, default=10)
-  args = parser.parse_args()
-  run(args.n_steps, args.eval_every_n_steps, args.n_eval_batches)
+  run()
