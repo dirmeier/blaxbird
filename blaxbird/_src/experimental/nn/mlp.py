@@ -14,7 +14,7 @@ class MLP(nnx.Module):
     kernel_init: nnx.initializers.Initializer = nnx.initializers.lecun_normal(),
     bias_init: nnx.initializers.Initializer = nnx.initializers.zeros_init(),
     use_bias: bool = True,
-    dropout_rate: float = None,
+    dropout_rate: float | None = None,
     activation: Callable[[jax.Array], jax.Array] = jax.nn.silu,
     activate_last: bool = False,
     rngs: nnx.rnglib.Rngs,

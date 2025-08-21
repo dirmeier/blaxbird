@@ -69,7 +69,7 @@ def heun_sampler_fn(config: EDMConfig):
   params = config.parameterization
 
   # ruff: noqa: ANN001, ANN202, ANN003
-  def _denoise(model, rng_key, inputs, sigma, context, params):
+  def _denoise(model, rng_key, inputs, sigma, context):
     new_shape = (-1,) + tuple(np.ones(inputs.ndim - 1, dtype=np.int32).tolist())
     inputs_t = inputs * params.in_scaling(sigma).reshape(new_shape)
     noise_cond = params.noise_conditioning(sigma)
