@@ -20,8 +20,7 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "einops>=0.8.1",
-    "grain",
-    "jax-ai-stack[tfds]",
+    "jax-ai-stack",
     "ml-collections>=1.1.0",
 ]
 dynamic = ["version"]
@@ -33,7 +32,6 @@ all = []
 dev = [
     "gitlint",
     "jupyter",
-    "matplotlib>=3.10.5",
     "pre-commit",
     "pytest>=7.2.0",
     "pytest-cov>=4.0.0",
@@ -41,6 +39,11 @@ dev = [
     "wandb>=0.21.1",
 ]
 examples = [
+    "tensorflow-datasets==4.9.6",
+    "tensorflow==2.17.1",
+    "protobuf==3.20.3",
+    "matplotlib==3.1.0",
+    "wandb>=0.21.1",
 ]
 
 [project.urls]
@@ -68,14 +71,14 @@ line-length = 80
 exclude = ["*_test.py", "docs/**", "examples/**"]
 
 [tool.ruff.lint]
-select = ["ANN", "D", "E", "F", "W", "I001"]
+select = ["D", "E", "F", "W", "I001"]
 extend-select = [
   "UP", "I", "PL", "S"
 ]
-ignore = ["S101"]
+ignore = ["S101", "ANN101", "PLR2044", "PLR0913"]
 
 [tool.ruff.lint.pydocstyle]
 convention= 'google'
 
 [tool.uv]
-upgrade-package = ["jax-ai-stack", "grain"]
+upgrade-package = ["jax-ai-stack"]

@@ -1,6 +1,5 @@
 from collections.abc import Callable, Iterable
 
-import grain.python as grain
 import jax
 import wandb
 from absl import logging
@@ -61,8 +60,8 @@ def train_fn(
     rng_key: jax.Array,
     model: nnx.Module,
     optimizer: nnx.Optimizer,
-    train_itr: grain.DataLoader,
-    val_itr: grain.DataLoader,
+    train_itr: Iterable,
+    val_itr: Iterable,
   ) -> None:
     """Train a NNX model.
 
@@ -70,8 +69,12 @@ def train_fn(
       rng_key: a jax.random.key object
       model: a NNX model
       optimizer: a nnx.Optimizer object
-      train_itr: a data loader
-      val_itr: a data loader
+      train_itr: an infinite data loader, i.e., an iteratlor that keeps running.
+        You can, for instance, construct this as a tfds.NumpyIterator or a
+        grain.DataLoader.
+      val_itr: an infinite data loader, i.e., an iteratlor that keeps running.
+        You can, for instance, construct this as a tfds.NumpyIterator or a
+        grain.DataLoader.
     """
     # get train and val fns
     step_fn, eval_fn = _step_and_val_fns(fns)

@@ -65,7 +65,7 @@ def get_default_checkpointer(
       )
       checkpoint_manager.wait_until_finished()
     except Exception as e:
-      logging.error(f"could not save checkpoint because of: {e}")
+      logging.error(f"could not save better checkpoint because of: {e}")
       logging.error("resuming nonetheless")
     try:
       logging.info("saving last checkpoint")
@@ -87,15 +87,19 @@ def get_default_checkpointer(
     """
     graph_def, state = nnx.split(model)
     opt_def, opt_state = nnx.split(optimizer.opt_state)
-    restored = checkpoint_manager.restore(
-      checkpoint_manager.best_step(),
-      args=ocp.args.Composite(
-        state=ocp.args.StandardRestore(nnx.eval_shape(lambda: state)),
-        opt_state=ocp.args.StandardRestore(nnx.eval_shape(lambda: opt_state)),
-      ),
-    )
-    model = nnx.merge(graph_def, restored["state"])
-    optimizer.opt_state = nnx.merge(opt_def, restored["opt_state"])
+    try:
+      logging.info("trying to restore best checkpoint")
+      restored = checkpoint_manager.restore(
+        checkpoint_manager.best_step(),
+        args=ocp.args.Composite(
+          state=ocp.args.StandardRestore(nnx.eval_shape(lambda: state)),
+          opt_state=ocp.args.StandardRestore(nnx.eval_shape(lambda: opt_state)),
+        ),
+      )
+      model = nnx.merge(graph_def, restored["state"])
+      optimizer.opt_state = nnx.merge(opt_def, restored["opt_state"])
+    except FileNotFoundError:
+      logging.warning("could not find checkpoint. resuming with blank state")
     return model, optimizer
 
   def restore_last_fn(
@@ -119,9 +123,7 @@ def get_default_checkpointer(
       model = nnx.merge(graphdef, restored[0])
       optimizer.opt_state = nnx.merge(optdef, restored[1])
     except FileNotFoundError:
-      logging.warning(
-        "could not find last checkpoint. resuming with blank state"
-      )
+      logging.warning("could not find checkpoint. resuming with blank state")
     return model, optimizer
 
   return save_fn, restore_best_fn, restore_last_fn

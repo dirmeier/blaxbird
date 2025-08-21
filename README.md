@@ -8,11 +8,18 @@
 ## About
 
 `Blaxbird` [blækbɜːd] is a high-level API to easily build NNX models and train them on CPU or GPU.
+
 Using `blaxbird` one can
 - concisely define models and loss functions without the usual JAX/Flax verbosity,
 - easily define checkpointers that save the best and most current network weights,
 - distribute data and model weights over multiple processes or GPUs,
 - define hooks that are periodically called during training.
+
+In addition, `blaxbird` offers high-quality implementation of common neural network modules and algorithms, such as:
+
+- MLP, Diffusion Transformer,
+- Flow Matching and Denoising Score Matching (EDM schedules) with Euler and Heun samplers,
+- Consistency Distillation/Matching.
 
 ## Example
 
@@ -58,7 +65,7 @@ train = train_fn(
 train(jr.key(2), model, optimizer, train_itr, val_itr)
 ```
 
-See a self-contained example in [examples/mnist_classification](examples/mnist_classification).
+See the entire self-contained example in [examples/mnist_classification](examples/mnist_classification).
 
 ## Usage
 
@@ -158,7 +165,7 @@ metrics = nnx.MultiMetric(
   accuracy=nnx.metrics.Accuracy(),
   loss=nnx.metrics.Average("loss"),
 )
-hook =  hook_fn(metrics, val_iter, eval_every_n_steps)
+hook = hook_fn(metrics, val_iter, hook_every_n_steps)
 ```
 
 This creates a hook function `hook` that after `eval_every_n_steps` steps iterates over the validation set
@@ -194,7 +201,7 @@ For instance, you would construct the checkpointing function then like this:
 from blaxbird import get_default_checkpointer
 
 hook_save, *_ = get_default_checkpointer(
-  os.path.join(outfolder, "checkpoints"), save_every_n_steps=100
+  "checkpoints", save_every_n_steps=100
 )
 ```
 
@@ -208,7 +215,7 @@ checkpoints:
 from blaxbird import get_default_checkpointer
 
 save, restore_best, restore_last = get_default_checkpointer(
-  os.path.join(outfolder, "checkpoints"), save_every_n_steps=100
+  "checkpoints", save_every_n_steps=100
 )
 ```
 
@@ -239,8 +246,8 @@ train = train_fn(
 train(jr.key(1), model, optimizer, train_itr, val_itr)
 ```
 
-An self-contained example that also explains how the data loaders should look like can be found
-in [examples/mnist_classification](examples/mnist_classification).
+Self-contained examples that also explain how the data loaders should look like can be found
+in [examples](examples).
 
 ## Installation
 
