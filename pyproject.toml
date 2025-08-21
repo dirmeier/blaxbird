@@ -68,7 +68,6 @@ addopts = "-v --doctest-modules --cov=./blaxbird --cov-report=xml"
 [tool.ruff]
 indent-width = 2
 line-length = 80
-exclude = ["*_test.py", "docs/**", "examples/**"]
 
 [tool.ruff.lint]
 select = ["D", "E", "F", "W", "I001"]
@@ -76,6 +75,8 @@ extend-select = [
   "UP", "I", "PL", "S"
 ]
 ignore = ["S101", "ANN101", "PLR2044", "PLR0913"]
+exclude = ["*_test.py", "docs/**", "examples/**"]
+
 
 [tool.ruff.lint.pydocstyle]
 convention= 'google'

@@ -124,7 +124,7 @@ class DiTBlock(nnx.Module):
 class DiT(nnx.Module):
   def __init__(  # noqa: PLR0913
     self,
-    image_size: int,
+    image_size: tuple[int, int, int],
     n_hidden_channels: int,
     patch_size: int,
     n_layers: int,

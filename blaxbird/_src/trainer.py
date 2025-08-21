@@ -80,8 +80,9 @@ def train_fn(
     step_fn, eval_fn = _step_and_val_fns(fns)
     # get model and replicate
     state = nnx.state((model, optimizer))
-    state = jax.device_put(state, shardings[0])
-    nnx.update((model, optimizer), state)
+    if shardings is not None:
+      state = jax.device_put(state, shardings[0])
+      nnx.update((model, optimizer), state)
     # metrics
     metrics = nnx.MultiMetric(loss=nnx.metrics.Average("loss"))
     metrics_history = {}
@@ -89,7 +90,8 @@ def train_fn(
     step_key, rng_key = jr.split(rng_key)
     for step, batch in zip(range(1, n_steps + 1), train_itr):
       train_key, val_key = jr.split(jr.fold_in(step_key, step))
-      batch = jax.device_put(batch, shardings[1])
+      if shardings is not None:
+        batch = jax.device_put(batch, shardings[1])
       # do a gradient step
       step_fn(
         model=model,
@@ -107,7 +109,8 @@ def train_fn(
           metrics_history[f"train/{metric}"] = float(value)
         # do evaluation loop
         for val_idx, batch in zip(range(n_eval_batches), val_itr):
-          batch = jax.device_put(batch, shardings[1])
+          if shardings is not None:
+            batch = jax.device_put(batch, shardings[1])
           eval_fn(
             model=model,
             rng_key=jr.fold_in(val_key, val_idx),
