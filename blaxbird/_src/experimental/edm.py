@@ -10,7 +10,7 @@ from blaxbird._src.experimental import samplers
 
 @dataclasses.dataclass
 class EDMParameterization:
-  n_sampling_steps: int
+  n_sampling_steps: int = 25
   sigma_min: float = 0.002
   sigma_max: float = 80.0
   rho: float = 7.0
@@ -66,10 +66,22 @@ class EDMParameterization:
 class EDMConfig:
   n_sampling_steps: int = 25
   sampler: str = "heun"
-  parameterization: EDMParameterization = EDMParameterization(n_sampling_steps)
+  parameterization: EDMParameterization = dataclasses.field(
+    default_factory=EDMParameterization
+  )
 
 
 def edm(config: EDMConfig):
+  """Construct denoising score-matching functions.
+
+  Uses the EDM parameterization.
+
+  Args:
+    config: a EDMConfig object
+
+  Returns:
+    returns a tuple consisting of train_step, val_step and sampling functions
+  """
   parameterization = config.parameterization
 
   def denoise(model, rng_key, inputs, sigma, context):

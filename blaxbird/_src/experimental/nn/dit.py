@@ -1,4 +1,4 @@
-import numpy as np
+import jax
 from einops import rearrange
 from flax import nnx
 from jax import numpy as jnp
@@ -7,19 +7,45 @@ from blaxbird._src.experimental.nn.embedding import timestep_embedding
 from blaxbird._src.experimental.nn.mlp import MLP
 
 
-def _modulate(inputs, shift, scale):
+def _modulate(inputs, shift, scale):  # noqa: ANN001, ANN202
   return inputs * (1.0 + scale[:, None]) + shift[:, None]
 
 
+def get_sinusoidal_embedding_1d(length, embedding_dim):  # noqa: ANN001, ANN202
+  emb = timestep_embedding(length.reshape(-1), embedding_dim)
+  return emb
+
+
+def sinusoidal_init(shape, dtype):  # noqa: ANN001, ANN202
+  def get_sinusoidal_embedding_2d(grid, embedding_dim):  # noqa: ANN001, ANN202
+    emb_h = get_sinusoidal_embedding_1d(grid[0], embedding_dim // 2)
+    emb_w = get_sinusoidal_embedding_1d(grid[1], embedding_dim // 2)
+    emb = jnp.concatenate([emb_h, emb_w], axis=1)
+    return emb
+
+  _, n_h_patches, n_w_patches, embedding_dim = shape
+  grid_h = jnp.arange(n_h_patches, dtype=jnp.float32)
+  grid_w = jnp.arange(n_w_patches, dtype=jnp.float32)
+  grid = jnp.meshgrid(grid_w, grid_h)
+
+  grid = jnp.stack(grid, axis=0)
+  grid = grid.reshape([2, 1, n_w_patches, n_h_patches])
+  pos_embed = get_sinusoidal_embedding_2d(grid, embedding_dim)
+
+  return jnp.expand_dims(pos_embed, 0)  # (1, H*W, D)
+
+
 class OutProjection(nnx.Module):
-  def __init__(self, hidden_size, patch_size, out_channels, *, rngs):
+  def __init__(  # noqa: PLR0913
+    self, hidden_size, n_embedding_features, patch_size, out_channels, *, rngs
+  ):
     super().__init__()
+    self.ada = nnx.Sequential(
+      nnx.silu, nnx.Linear(n_embedding_features, 2 * hidden_size, rngs=rngs)
+    )
     self.norm = nnx.LayerNorm(hidden_size, rngs=rngs)
     self.out = nnx.Linear(
       hidden_size, patch_size * patch_size * out_channels, rngs=rngs
-    )
-    self.ada = nnx.Sequential(
-      nnx.swish, nnx.Linear(hidden_size, 2 * hidden_size, rngs=rngs)
     )
 
   def __call__(self, inputs, context):
@@ -29,33 +55,55 @@ class OutProjection(nnx.Module):
 
 
 class DiTBlock(nnx.Module):
-  def __init__(
+  def __init__(  # noqa: PLR0913
     self,
     hidden_size: int,
+    n_embedding_features: int,
+    *,
     n_heads: int,
     dropout_rate: float = 0.1,
-    *,
     rngs: nnx.rnglib.Rngs,
   ):
+    """Diffusion-Transformer block.
+
+    Args:
+      hidden_size: number of features of the hidden layers
+      n_embedding_features: number o features of time embedding
+      n_heads: number of transformer heads
+      dropout_rate: float
+      rngs: random keys
+    """
     super().__init__()
-    self.ada = nnx.Linear(hidden_size, hidden_size * 6, rngs=rngs)
+    self.ada = nnx.Sequential(
+      nnx.silu, nnx.Linear(n_embedding_features, hidden_size * 6, rngs=rngs)
+    )
+
     self.layer_norm1 = nnx.LayerNorm(
       hidden_size, use_scale=False, use_bias=False, rngs=rngs
     )
     self.self_attn = nnx.MultiHeadAttention(
-      num_heads=n_heads, in_features=hidden_size, rngs=rngs
+      num_heads=n_heads, in_features=hidden_size, rngs=rngs, decode=False
     )
     self.layer_norm2 = nnx.LayerNorm(
       hidden_size, use_scale=False, use_bias=False, rngs=rngs
     )
     self.mlp = MLP(
       hidden_size,
-      [hidden_size * 4, hidden_size],
+      (hidden_size * 4, hidden_size),
       dropout_rate=dropout_rate,
       rngs=rngs,
     )
 
-  def __call__(self, inputs, context, **kwargs):
+  def __call__(self, inputs: jax.Array, context: jax.Array) -> jax.Array:
+    """Transform inputs through the DiT block.
+
+    Args:
+      inputs: input array
+      context: values to condition on
+
+    Returns:
+      returns a jax.Array
+    """
     hidden = inputs
     adaln_norm = self.ada(context)
     attn, gate = jnp.split(adaln_norm, 2, axis=-1)
@@ -74,19 +122,32 @@ class DiTBlock(nnx.Module):
 
 
 class DiT(nnx.Module):
-  def __init__(
+  def __init__(  # noqa: PLR0913
     self,
-    n_in_channels,
-    n_hidden_channels,
-    patch_size,
-    n_layers,
-    n_heads,
+    image_size: int,
+    n_hidden_channels: int,
+    patch_size: int,
+    n_layers: int,
+    n_heads: int,
     n_embedding_features=256,
     dropout_rate=0.0,
     *,
-    rngs,
+    rngs: nnx.rnglib.Rngs,
   ):
-    self.n_in_channels = n_in_channels
+    """Diffusion-Transformer.
+
+    Args:
+      image_size: size of the image, e.g., (32, 32, 3)
+      n_hidden_channels: number if hidden channels
+      patch_size: size of each path
+      n_layers: integer
+      n_heads: integer
+      n_embedding_features: integer
+      dropout_rate: float
+      rngs: random keys
+    """
+    self.image_size = image_size
+    self.n_in_channels = image_size[-1]
     self.n_embedding_features = n_embedding_features
     self.patch_size = patch_size
     self.time_embedding = nnx.Sequential(
@@ -96,7 +157,7 @@ class DiT(nnx.Module):
       nnx.swish,
     )
     self.patchify = nnx.Conv(
-      n_in_channels,
+      self.n_in_channels,
       n_hidden_channels,
       (patch_size, patch_size),
       (patch_size, patch_size),
@@ -105,46 +166,71 @@ class DiT(nnx.Module):
       rngs=rngs,
     )
     self.patch_embedding = nnx.Param(
-      nnx.initializers.lecun_normal()(
-        rngs.params(), (1, n_hidden_channels, n_hidden_channels)
-      )
+      sinusoidal_init(
+        (
+          1,
+          image_size[0] // patch_size,
+          image_size[1] // patch_size,
+          n_hidden_channels,
+        ),
+        None,
+      ),
     )
     self.dit_blocks = tuple(
       [
-        DiTBlock(n_hidden_channels, n_heads, dropout_rate, rngs=rngs)
-        for _ in n_layers
+        DiTBlock(
+          n_hidden_channels,
+          n_embedding_features,
+          n_heads=n_heads,
+          dropout_rate=dropout_rate,
+          rngs=rngs,
+        )
+        for _ in range(n_layers)
       ]
     )
-    self.final_time_embedding = nnx.Linear(
-      n_hidden_channels, n_hidden_channels * 2, rngs=rngs
-    )
     self.out_projection = OutProjection(
-      n_hidden_channels, patch_size, n_in_channels, rngs=rngs
+      n_hidden_channels,
+      n_embedding_features,
+      patch_size,
+      self.n_in_channels,
+      rngs=rngs,
     )
 
   def _patchify(self, inputs):
-    B, H, W, C = inputs.shape
-    n_patches = H // self.patch_size
+    n_h_patches = self.image_size[0] // self.patch_size
+    n_w_patches = self.image_size[1] // self.patch_size
     hidden = self.patchify(inputs)
     outputs = rearrange(
-      hidden, "b h w c -> b (h w) c", h=n_patches, w=n_patches
+      hidden, "b h w c -> b (h w) c", h=n_h_patches, w=n_w_patches
     )
     return outputs
 
   def _unpatchify(self, inputs):
-    B, HW, *_ = inputs.shape
-    h = w = int(np.sqrt(HW))
-    p = q = self.patch_size
-    hidden = jnp.reshape(inputs, (B, h, w, p, q, self.n_in_channels))
+    H = self.image_size[0] // self.patch_size
+    W = self.image_size[1] // self.patch_size
+    P = Q = self.patch_size
+    hidden = jnp.reshape(inputs, (-1, H, W, P, Q, self.n_in_channels))
     outputs = rearrange(
-      hidden, "b h w p q c -> b (h p) (w q) c", h=h, w=w, p=q, q=q
+      hidden, "b h w p q c -> b (h p) (w q) c", h=H, w=W, p=P, q=Q
     )
     return outputs
 
   def _embed(self, inputs):
-    return inputs + self.patch_embedding.value
+    return inputs + jax.lax.stop_gradient(self.patch_embedding.value)
 
-  def __call__(self, inputs, times):
+  def __call__(
+    self, inputs: jax.Array, times: jax.Array, context: jax.Array = None
+  ):
+    """Transform inputs through the DiT.
+
+    Args:
+      inputs: input in image form
+      times: one-dimensional array
+      context: conditioning variable in image form
+
+    Returns:
+      returns a jax
+    """
     hidden = self._patchify(inputs)
     hidden = self._embed(hidden)
     times = self.time_embedding(
@@ -159,8 +245,9 @@ class DiT(nnx.Module):
     return outputs
 
 
-def SmallDiT(patch_size=2, **kwargs):
+def SmallDiT(image_size, patch_size=2, **kwargs):
   return DiT(
+    image_size,
     n_hidden_channels=384,
     patch_size=patch_size,
     n_layers=12,
@@ -169,8 +256,9 @@ def SmallDiT(patch_size=2, **kwargs):
   )
 
 
-def BaseDiT(patch_size=2, **kwargs):
+def BaseDiT(image_size, patch_size=2, **kwargs):
   return DiT(
+    image_size,
     n_hidden_channels=768,
     patch_size=patch_size,
     n_layers=12,
@@ -179,8 +267,9 @@ def BaseDiT(patch_size=2, **kwargs):
   )
 
 
-def LargeDiT(patch_size=2, **kwargs):
+def LargeDiT(image_size, patch_size=2, **kwargs):
   return DiT(
+    image_size,
     n_hidden_channels=1024,
     patch_size=patch_size,
     n_layers=24,
@@ -189,16 +278,12 @@ def LargeDiT(patch_size=2, **kwargs):
   )
 
 
-def XtraLargeDiT(patch_size=2, **kwargs):
+def XtraLargeDiT(image_size, patch_size=2, **kwargs):
   return DiT(
+    image_size,
     n_hidden_channels=1152,
     patch_size=patch_size,
     n_layers=28,
     n_heads=16,
     **kwargs,
   )
-
-
-
-
-

@@ -1,24 +1,25 @@
-from typing import Callable
+from collections.abc import Callable
 
 import jax
 from flax import nnx
 
 
 class MLP(nnx.Module):
+  # ruff: noqa: PLR0913, ANN204, ANN101
   def __init__(
     self,
-    in_features,
-    output_features,
+    in_features: int,
+    output_features: tuple[int, ...],
     *,
-    kernel_init: nnx.initializers.Initializer | None = None,
-    bias_init: nnx.initializers.Initializer | None = None,
+    kernel_init: nnx.initializers.Initializer = nnx.initializers.lecun_normal(),
+    bias_init: nnx.initializers.Initializer = nnx.initializers.zeros_init(),
     use_bias: bool = True,
-    dropout_rate=None,
+    dropout_rate: float = None,
     activation: Callable[[jax.Array], jax.Array] = jax.nn.silu,
     activate_last: bool = False,
-    rngs,
+    rngs: nnx.rnglib.Rngs,
   ):
-    features = [in_features] + output_features
+    features = [in_features] + list(output_features)
     layers = []
     for index, (din, dout) in enumerate(zip(features[:-1], features[1:])):
       layers.append(
@@ -38,7 +39,15 @@ class MLP(nnx.Module):
     if dropout_rate is not None:
       self.dropout_layer = nnx.Dropout(dropout_rate, rngs=rngs)
 
-  def __call__(self, inputs):
+  def __call__(self, inputs: jax.Array):
+    """Project inputs through the MLP.
+
+    Args:
+      inputs: jax.Array
+
+    Returns:
+      jax.Array
+    """
     num_layers = len(self.layers)
 
     out = inputs

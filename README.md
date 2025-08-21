@@ -17,8 +17,9 @@ Using `blaxbird` one can
 
 In addition, `blaxbird` offers high-quality implementation of common neural network modules and algorithms, such as:
 
-- [MLP], [UNet], [Diffusion Transformer], [Multi-modal Diffusion Transformer],
-- [Flow Matching], [Denoising Score Matching (VE, VP and EDM schedules)]
+- MLP, Diffusion Transformer,
+- Flow Matching and Denoising Score Matching (EDM schedules) with Euler and Heun samplers,
+- Consistency Distillation/Matching.
 
 ## Example
 
@@ -64,7 +65,7 @@ train = train_fn(
 train(jr.key(2), model, optimizer, train_itr, val_itr)
 ```
 
-See a self-contained example in [examples/mnist_classification](examples/mnist_classification).
+See the entire self-contained example in [examples/mnist_classification](examples/mnist_classification).
 
 ## Usage
 
@@ -245,8 +246,8 @@ train = train_fn(
 train(jr.key(1), model, optimizer, train_itr, val_itr)
 ```
 
-An self-contained example that also explains how the data loaders should look like can be found
-in [examples/mnist_classification](examples/mnist_classification).
+Self-contained examples that also explain how the data loaders should look like can be found
+in [examples](examples).
 
 ## Installation
 

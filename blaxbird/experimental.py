@@ -1,20 +1,32 @@
-from blaxbird._src.experimental.edm import edm
-from blaxbird._src.experimental.rectified_flow_matching import flow_matching
-from blaxbird._src.experimental.nn.dit import DiT, DiTBlock, SmallDiT, BaseDiT, LargeDiT, XtraLargeDiT
-# from blaxbird._src.experimental.nn.mmdit import MMDiT, MMDiTBlock, SmallMMDiT, MMBaseDiT, MMLargeDiT, MMXtraLargeDiT
-# from blaxbird._src.experimental.nn.unet import UNet
+"""Experimental models that might be moved to the main code base."""
+
+from blaxbird._src.experimental.edm import EDMConfig, edm
+from blaxbird._src.experimental.nn.dit import (
+  BaseDiT,
+  DiT,
+  DiTBlock,
+  LargeDiT,
+  SmallDiT,
+  XtraLargeDiT,
+)
 from blaxbird._src.experimental.nn.mlp import MLP
+from blaxbird._src.experimental.rfm import (
+  RFMConfig,
+  rfm,
+)
 
 __all__ = [
- "edm",
- "flow_matching",
- #
- "DiT",
- "DiTBlock",
- "SmallDiT",
- "BaseDiT",
- "LargeDiT",
- "XtraLargeDiT",
- #
- "MLP"
+  "edm",
+  "EDMConfig",
+  "rfm",
+  "RFMConfig",
+  #
+  "DiT",
+  "DiTBlock",
+  "SmallDiT",
+  "BaseDiT",
+  "LargeDiT",
+  "XtraLargeDiT",
+  #
+  "MLP",
 ]

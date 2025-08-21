@@ -29,7 +29,7 @@ def get_sharding():
   return model_sharding, data_sharding
 
 
-def visualize_hook(val_iter, hook_every_n_steps):
+def metrics_hook(val_iter, hook_every_n_steps):
   def hook_fn(metrics, val_iter, hook_every_n_steps):
     def fn(step, *, model, **kwargs):
       if step % hook_every_n_steps != 0:
@@ -57,8 +57,8 @@ def visualize_hook(val_iter, hook_every_n_steps):
   return hook_fn(metrics, val_iter, hook_every_n_steps)
 
 
-def get_hooks(val_itr, eval_every_n_steps):
-  return [visualize_hook(val_itr, eval_every_n_steps)]
+def get_hooks(val_itr, hook_every_n_steps):
+  return [metrics_hook(val_itr, hook_every_n_steps)]
 
 
 def get_train_and_val_itrs(rng_key, outfolder):
@@ -72,22 +72,22 @@ def get_train_and_val_itrs(rng_key, outfolder):
 
 def run(n_steps, eval_every_n_steps, n_eval_batches):
   logging.set_verbosity(logging.INFO)
+  outfolder = os.path.join(os.path.dirname(__file__), "workdir")
 
-  outfolder = os.path.dirname(__file__)
   train_itr, val_itr = get_train_and_val_itrs(
     jr.key(0), os.path.join(outfolder, "data")
   )
 
   model = CNN(rngs=nnx.rnglib.Rngs(jr.key(1)))
   optimizer = get_optimizer(model)
-  model_sharding, data_sharding = get_sharding()
-  hooks = get_hooks(val_itr, eval_every_n_steps)
 
   save_fn, _, restore_last_fn = get_default_checkpointer(
-    os.path.join(outfolder, "checkpoints"), save_every_n_steps=100
+    os.path.join(outfolder, "checkpoints"), save_every_n_steps=eval_every_n_steps
   )
+  hooks = get_hooks(val_itr, eval_every_n_steps) + [save_fn]
+
+  model_sharding, data_sharding = get_sharding()
   model, optimizer = restore_last_fn(model, optimizer)
-  hooks.append(save_fn)
 
   train = train_fn(
     fns=(train_step, val_step),
