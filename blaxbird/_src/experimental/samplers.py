@@ -5,10 +5,7 @@ from flax import nnx
 from jax import numpy as jnp
 from jax import random as jr
 
-from blaxbird._src.experimental.edm import EDMConfig
-from blaxbird._src.experimental.rfm import (
-  RFMConfig,
-)
+from blaxbird._src.experimental.parameterizations import EDMConfig, RFMConfig
 
 
 def euler_sample_fn(config: RFMConfig):
