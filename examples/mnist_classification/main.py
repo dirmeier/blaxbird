@@ -8,10 +8,9 @@ from absl import logging
 from flax import nnx
 from jax import random as jr
 from jax.experimental import mesh_utils
+from model import CNN, train_step, val_step
 
 from blaxbird import get_default_checkpointer, train_fn
-
-from model import CNN, train_step, val_step
 
 
 def get_optimizer(model, lr=1e-4):
@@ -83,7 +82,8 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
   optimizer = get_optimizer(model)
 
   save_fn, _, restore_last_fn = get_default_checkpointer(
-    os.path.join(outfolder, "checkpoints"), save_every_n_steps=eval_every_n_steps
+    os.path.join(outfolder, "checkpoints"),
+    save_every_n_steps=eval_every_n_steps,
   )
   hooks = get_hooks(val_itr, eval_every_n_steps) + [save_fn]
 
