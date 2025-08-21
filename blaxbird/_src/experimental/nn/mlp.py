@@ -5,7 +5,6 @@ from flax import nnx
 
 
 class MLP(nnx.Module):
-  # ruff: noqa: PLR0913, ANN204, ANN101
   def __init__(
     self,
     in_features: int,

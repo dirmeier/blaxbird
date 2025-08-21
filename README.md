@@ -15,11 +15,11 @@ Using `blaxbird` one can
 - distribute data and model weights over multiple processes or GPUs,
 - define hooks that are periodically called during training.
 
-In addition, `blaxbird` offers high-quality implementation of common neural network modules and algorithms, such as:
+In addition, `blaxbird` offers high-quality implementations of common neural network modules and algorithms, such as:
 
-- MLP, Diffusion Transformer,
-- Flow Matching and Denoising Score Matching (EDM schedules) with Euler and Heun samplers,
-- Consistency Distillation/Matching.
+- MLPs, DiTs, UNets,
+- Flow Matching and Denoising Score Matching (EDM schedules) models with Euler and Heun samplers,
+- Consistency Distillation/Matching models.
 
 ## Example
 

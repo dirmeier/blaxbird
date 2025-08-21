@@ -62,8 +62,11 @@ skips = ["B101", "B310"]
 show_error_codes = true
 no_implicit_optional = true
 
-[tool.pytest]
+[tool.pytest.ini_options]
 addopts = "-v --doctest-modules --cov=./blaxbird --cov-report=xml"
+testpaths = [
+    "blaxbird"
+]
 
 [tool.ruff]
 indent-width = 2
