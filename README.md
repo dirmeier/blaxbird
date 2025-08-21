@@ -165,7 +165,7 @@ metrics = nnx.MultiMetric(
   accuracy=nnx.metrics.Accuracy(),
   loss=nnx.metrics.Average("loss"),
 )
-hook =  hook_fn(metrics, val_iter, hook_every_n_steps)
+hook = hook_fn(metrics, val_iter, hook_every_n_steps)
 ```
 
 This creates a hook function `hook` that after `eval_every_n_steps` steps iterates over the validation set

@@ -8,9 +8,10 @@ from absl import logging
 from flax import nnx
 from jax import random as jr
 from jax.experimental import mesh_utils
-from model import CNN, train_step, val_step
 
 from blaxbird import get_default_checkpointer, train_fn
+
+from model import CNN, train_step, val_step
 
 
 def get_optimizer(model, lr=1e-4):
