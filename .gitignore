@@ -155,3 +155,6 @@ cython_debug/
 .vscode/
 
 .DS_Store
+
+# git worktrees for isolated feature work
+.worktrees/
