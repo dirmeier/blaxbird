@@ -16,10 +16,24 @@ from model import CNN, train_step, val_step
 from blaxbird import get_default_checkpointer, train_fn
 
 
-def get_optimizer(model, lr=1e-4):
-  tx = optax.adamw(lr)
-  tx = nnx.Optimizer(model, tx=tx)
-  return tx
+def get_optimizer(
+  model, *, peak_lr=1e-4, n_steps, warmup_steps=1000, grad_clip_norm=1.0
+):
+  # warmup_cosine_decay_schedule requires decay_steps > warmup_steps (the
+  # cosine phase runs over decay_steps - warmup_steps); clamp so a short
+  # n_steps (e.g. a smoke run) doesn't raise ValueError from optax.
+  warmup_steps = min(warmup_steps, n_steps // 2)
+  schedule = optax.warmup_cosine_decay_schedule(
+    init_value=0.0,
+    peak_value=peak_lr,
+    warmup_steps=warmup_steps,
+    decay_steps=n_steps,
+    end_value=peak_lr * 0.01,
+  )
+  tx = optax.chain(
+    optax.clip_by_global_norm(grad_clip_norm), optax.adamw(schedule)
+  )
+  return nnx.Optimizer(model, tx=tx)
 
 
 def get_sharding():
@@ -82,7 +96,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
   )
 
   model = CNN(rngs=nnx.rnglib.Rngs(jr.key(1)))
-  optimizer = get_optimizer(model)
+  optimizer = get_optimizer(model, n_steps=n_steps)
 
   save_fn, _, restore_last_fn = get_default_checkpointer(
     os.path.join(outfolder, "checkpoints"),
