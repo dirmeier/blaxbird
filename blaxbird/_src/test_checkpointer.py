@@ -34,3 +34,32 @@ def test_save_and_restore_last_roundtrip_optimizer_only(tmp_path):
     restored_optimizer.model.linear.kernel.value,
     optimizer.model.linear.kernel.value,
   )
+
+
+def test_custom_criterion_key_and_best_mode(tmp_path):
+  model = _Linear(rngs=nnx.rnglib.Rngs(jr.key(0)))
+  optimizer = nnx.Optimizer(model, tx=optax.sgd(1e-2))
+
+  save_fn, restore_best_fn, _ = get_default_checkpointer(
+    str(tmp_path),
+    save_every_n_steps=1,
+    criterion_key="val/accuracy",
+    best_mode="max",
+  )
+  save_fn(
+    1,
+    model=optimizer.model,
+    optimizer=optimizer,
+    metrics={"val/accuracy": 0.7},
+  )
+  save_fn(
+    2,
+    model=optimizer.model,
+    optimizer=optimizer,
+    metrics={"val/accuracy": 0.9},
+  )
+
+  new_model = _Linear(rngs=nnx.rnglib.Rngs(jr.key(1)))
+  new_optimizer = nnx.Optimizer(new_model, tx=optax.sgd(1e-2))
+  restored_optimizer = restore_best_fn(new_optimizer)
+  assert isinstance(restored_optimizer, nnx.Optimizer)

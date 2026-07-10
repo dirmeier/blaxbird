@@ -11,6 +11,8 @@ def get_default_checkpointer(
   *,
   save_every_n_steps: int,
   max_to_keep: int = 5,
+  criterion_key: str = "val/loss",
+  best_mode: str = "min",
 ) -> tuple[Callable, Callable, Callable]:
   """Construct functions for checkpointing functionality.
 
@@ -18,6 +20,12 @@ def get_default_checkpointer(
     outfolder: a path specifying where checkpoints are stored
     save_every_n_steps: how often to store checkpoints
     max_to_keep: number of checkpoints to store before they get deleted
+    criterion_key: the key into the `metrics` dict passed to `save_fn` used
+      to decide which checkpoint is "best". Must match a key produced by
+      whatever metrics dict the caller's training loop passes in -- for
+      `blaxbird.train_fn`, that's `f"val/{metric_name}"`.
+    best_mode: "min" or "max" -- whether a lower or higher `criterion_key`
+      value is better.
 
   Returns:
     returns function to saev and restore checkpoints
@@ -26,8 +34,8 @@ def get_default_checkpointer(
   options = ocp.CheckpointManagerOptions(
     max_to_keep=max_to_keep,
     create=True,
-    best_mode="min",
-    best_fn=lambda x: x["val/loss"],
+    best_mode=best_mode,
+    best_fn=lambda x: x[criterion_key],
   )
   checkpoint_manager = ocp.CheckpointManager(
     os.path.join(outfolder, "best"),
