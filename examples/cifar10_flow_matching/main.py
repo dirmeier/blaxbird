@@ -1,5 +1,8 @@
 import argparse
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dataloader
 import jax
@@ -12,9 +15,9 @@ from flax import nnx
 from jax import random as jr
 from jax.experimental import mesh_utils
 
-import blaxbird
 from blaxbird import get_default_checkpointer, train_fn
-from blaxbird.experimental import rfm
+from _common import rfm
+from _common.nn import dit  # for getattr(dit, dit_type, ...) below
 
 
 def get_optimizer(model, lr=1e-4):
@@ -97,7 +100,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches, dit_type, log_to_wandb):
     jr.key(0), os.path.join(outfolder, "data")
   )
 
-  model = getattr(blaxbird.experimental, dit_type)(
+  model = getattr(dit, dit_type)(
     image_size=(32, 32, 3), rngs=nnx.rnglib.Rngs(jr.key(1))
   )
   train_step, val_step, sample_fn = rfm()

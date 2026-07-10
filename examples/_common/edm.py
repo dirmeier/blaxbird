@@ -3,8 +3,8 @@ from flax import nnx
 from jax import numpy as jnp
 from jax import random as jr
 
-from blaxbird._src.experimental import samplers
-from blaxbird._src.experimental.parameterizations import EDMConfig
+from _common import samplers
+from _common.parameterizations import EDMConfig
 
 
 def edm(config: EDMConfig):
