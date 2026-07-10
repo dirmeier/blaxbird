@@ -28,3 +28,11 @@ def test_edm_train_step_runs():
   batch = {"inputs": jnp.ones((2, 4))}
   loss, grads = train_step(model, jr.key(1), batch)
   assert loss.shape == ()
+
+
+def test_edm_returns_objective_fns():
+  from blaxbird._src._types import ObjectiveFns
+
+  fns = edm(EDMConfig())
+  assert isinstance(fns, ObjectiveFns)
+  assert fns.sample_fn is fns[2]
