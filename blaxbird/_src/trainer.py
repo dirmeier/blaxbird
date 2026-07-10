@@ -58,7 +58,6 @@ def train_fn(
 
   def train(
     rng_key: jax.Array,
-    model: nnx.Module,
     optimizer: nnx.Optimizer,
     train_itr: Iterable,
     val_itr: Iterable,
@@ -67,8 +66,9 @@ def train_fn(
 
     Args:
       rng_key: a jax.random.key object
-      model: a NNX model
-      optimizer: a nnx.Optimizer object
+      optimizer: a nnx.Optimizer object. The wrapped model (optimizer.model)
+        is trained in place -- there is no separate model argument, since
+        nnx.Optimizer already owns the model it wraps.
       train_itr: an infinite data loader, i.e., an iteratlor that keeps running.
         You can, for instance, construct this as a tfds.NumpyIterator or a
         grain.DataLoader.
@@ -76,6 +76,7 @@ def train_fn(
         You can, for instance, construct this as a tfds.NumpyIterator or a
         grain.DataLoader.
     """
+    model = optimizer.model
     # get train and val fns
     step_fn, eval_fn = _step_and_val_fns(fns)
     # get model and replicate
