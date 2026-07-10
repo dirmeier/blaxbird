@@ -62,5 +62,5 @@ def edm(config: EDMConfig):
   def val_step(model, rng_key, batch, **kwargs):
     return loss_fn(model, rng_key, batch)
 
-  sampler = getattr(samplers, config.sampler + "sample_fn")(config)
+  sampler = samplers.get_sampler_fn(config.sampler)(config)
   return train_step, val_step, sampler

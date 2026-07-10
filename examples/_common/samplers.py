@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import chex
 import jax
 import numpy as np
@@ -54,7 +56,7 @@ def euler_sample_fn(config: RFMConfig):
   return sample_fn
 
 
-def heun_sampler_fn(config: EDMConfig):
+def heun_sample_fn(config: EDMConfig):
   """Construct a Heun sampler for denoising score matching.
 
   Args:
@@ -135,3 +137,29 @@ def heun_sampler_fn(config: EDMConfig):
     return samples
 
   return sample_fn
+
+
+SAMPLERS: dict[str, Callable] = {
+  "euler": euler_sample_fn,
+  "heun": heun_sample_fn,
+}
+
+
+def get_sampler_fn(name: str) -> Callable:
+  """Look up a sampler constructor by name.
+
+  Args:
+    name: one of the registered sampler names, currently "euler" or "heun".
+
+  Returns:
+    the sampler-constructor callable registered under `name`. Calling it
+    with a config object returns the actual `sample_fn`.
+
+  Raises:
+    ValueError: if `name` is not a registered sampler.
+  """
+  if name not in SAMPLERS:
+    raise ValueError(
+      f"unknown sampler {name!r}, expected one of {sorted(SAMPLERS)}"
+    )
+  return SAMPLERS[name]
