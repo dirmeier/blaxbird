@@ -2,7 +2,6 @@ from collections.abc import Callable
 
 import chex
 import jax
-import numpy as np
 from flax import nnx
 from jax import numpy as jnp
 from jax import random as jr
@@ -67,21 +66,6 @@ def heun_sample_fn(config: EDMConfig):
   """
   params = config.parameterization
 
-  # ruff: noqa: ANN001, ANN202, ANN003
-  def _denoise(model, rng_key, inputs, sigma, context):
-    new_shape = (-1,) + tuple(np.ones(inputs.ndim - 1, dtype=np.int32).tolist())
-    inputs_t = inputs * params.in_scaling(sigma).reshape(new_shape)
-    noise_cond = params.noise_conditioning(sigma)
-    outputs = model(
-      inputs=inputs_t,
-      context=context,
-      times=noise_cond,
-    )
-    skip = inputs * params.skip_scaling(sigma).reshape(new_shape)
-    outputs = outputs * params.out_scaling(sigma).reshape(new_shape)
-    outputs = skip + outputs
-    return outputs
-
   def sample_fn(
     model: nnx.Module,
     rng_key: jax.Array,
@@ -110,11 +94,9 @@ def heun_sample_fn(config: EDMConfig):
     samples = jr.normal(rng_key, sample_shape) * sigmas[0]
 
     for i, (sigma, sigma_next) in enumerate(zip(sigmas[:-1], sigmas[1:])):
-      pred_key1, pred_key2, rng_key = jr.split(rng_key, 3)
       sample_curr = samples
-      pred_curr = _denoise(
+      pred_curr = params.denoise(
         model,
-        pred_key1,
         inputs=sample_curr,
         sigma=jnp.repeat(sigma, n),
         context=context,
@@ -123,9 +105,8 @@ def heun_sample_fn(config: EDMConfig):
       samples = sample_curr + d_cur * (sigma_next - sigma)
       # second order correction
       if i < config.n_sampling_steps - 1:
-        pred_next = _denoise(
+        pred_next = params.denoise(
           model,
-          pred_key2,
           inputs=samples,
           sigma=jnp.repeat(sigma_next, n),
           context=context,

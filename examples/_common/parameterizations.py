@@ -1,5 +1,7 @@
 import dataclasses
 
+import jax
+import numpy as np
 from jax import numpy as jnp
 
 
@@ -55,6 +57,28 @@ class EDMParameterization:
       else 0
     )
     return sigma + gamma * sigma
+
+  def denoise(
+    self, model, inputs: jax.Array, sigma: jax.Array, context: jax.Array | None
+  ) -> jax.Array:
+    """Run the EDM denoising forward pass.
+
+    Args:
+      model: a nnx.Module callable as model(inputs=, context=, times=).
+      inputs: noised inputs to denoise.
+      sigma: per-example noise level, shape (batch,).
+      context: conditioning variable, or None.
+
+    Returns:
+      the denoised prediction, same shape as `inputs`.
+    """
+    new_shape = (-1,) + tuple(np.ones(inputs.ndim - 1, dtype=np.int32).tolist())
+    inputs_t = inputs * self.in_scaling(sigma).reshape(new_shape)
+    noise_cond = self.noise_conditioning(sigma)
+    outputs = model(inputs=inputs_t, context=context, times=noise_cond)
+    skip = inputs * self.skip_scaling(sigma).reshape(new_shape)
+    outputs = outputs * self.out_scaling(sigma).reshape(new_shape)
+    return skip + outputs
 
 
 @dataclasses.dataclass
