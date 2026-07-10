@@ -19,9 +19,7 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "einops>=0.8.1",
     "jax-ai-stack",
-    "ml-collections>=1.1.0",
 ]
 dynamic = ["version"]
 
@@ -30,6 +28,7 @@ all = []
 
 [dependency-groups]
 dev = [
+    "chex",
     "gitlint",
     "jupyter",
     "pre-commit",
@@ -44,6 +43,9 @@ examples = [
     "protobuf==3.20.3",
     "matplotlib==3.1.0",
     "wandb>=0.21.1",
+    "einops>=0.8.1",
+    "chex",
+    "ml-collections>=1.1.0",
 ]
 
 [project.urls]

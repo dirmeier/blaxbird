@@ -3,8 +3,8 @@ from einops import rearrange
 from flax import nnx
 from jax import numpy as jnp
 
-from blaxbird._src.experimental.nn.embedding import timestep_embedding
-from blaxbird._src.experimental.nn.mlp import MLP
+from _common.nn.embedding import timestep_embedding
+from _common.nn.mlp import MLP
 
 
 def _modulate(inputs, shift, scale):  # noqa: ANN001, ANN202

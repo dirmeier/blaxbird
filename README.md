@@ -15,11 +15,10 @@ Using `blaxbird` one can
 - distribute data and model weights over multiple processes or GPUs,
 - define hooks that are periodically called during training.
 
-In addition, `blaxbird` offers high-quality implementations of common neural network modules and algorithms, such as:
-
-- MLPs, DiTs, UNets,
-- Flow Matching and Denoising Score Matching (EDM schedules) models with Euler and Heun samplers,
-- Consistency Distillation/Matching models.
+`blaxbird` is a training framework, not a model zoo -- it doesn't ship
+neural network architectures. See [examples](examples) for worked
+end-to-end examples (including a DiT trained with flow matching on
+CIFAR-10) that define their own models and hand them to `blaxbird`.
 
 ## Example
 
