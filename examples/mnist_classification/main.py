@@ -91,7 +91,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
   hooks = get_hooks(val_itr, eval_every_n_steps) + [save_fn]
 
   model_sharding, data_sharding = get_sharding()
-  model, optimizer = restore_last_fn(model, optimizer)
+  optimizer = restore_last_fn(optimizer)
 
   train = train_fn(
     fns=(train_step, val_step),
@@ -102,7 +102,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
     hooks=hooks,
     log_to_wandb=False,
   )
-  train(jr.key(2), model, optimizer, train_itr, val_itr)
+  train(jr.key(2), optimizer, train_itr, val_itr)
 
 
 if __name__ == "__main__":

@@ -103,22 +103,22 @@ def run(n_steps, eval_every_n_steps, n_eval_batches, dit_type, log_to_wandb):
   model = getattr(dit, dit_type)(
     image_size=(32, 32, 3), rngs=nnx.rnglib.Rngs(jr.key(1))
   )
-  train_step, val_step, sample_fn = rfm()
+  objective = rfm()
   optimizer = get_optimizer(model)
 
   save_fn, _, restore_last_fn = get_default_checkpointer(
     os.path.join(outfolder, "checkpoints"),
     save_every_n_steps=eval_every_n_steps,
   )
-  hooks = get_hooks(sample_fn, val_itr, eval_every_n_steps, log_to_wandb) + [
-    save_fn
-  ]
+  hooks = get_hooks(
+    objective.sample_fn, val_itr, eval_every_n_steps, log_to_wandb
+  ) + [save_fn]
 
   model_sharding, data_sharding = get_sharding()
-  model, optimizer = restore_last_fn(model, optimizer)
+  optimizer = restore_last_fn(optimizer)
 
   train = train_fn(
-    fns=(train_step, val_step),
+    fns=(objective.train_step, objective.val_step),
     n_steps=n_steps,
     eval_every_n_steps=eval_every_n_steps,
     n_eval_batches=n_eval_batches,
@@ -126,7 +126,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches, dit_type, log_to_wandb):
     hooks=hooks,
     log_to_wandb=False,
   )
-  train(jr.key(2), model, optimizer, train_itr, val_itr)
+  train(jr.key(2), optimizer, train_itr, val_itr)
 
 
 if __name__ == "__main__":

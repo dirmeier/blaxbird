@@ -76,16 +76,15 @@ def get_default_checkpointer(
       logging.error(f"could not last checkpoint because of: {e}")
       logging.error("resuming nonetheless")
 
-  def restore_best_fn(
-    model: nnx.Module, optimizer: nnx.Optimizer
-  ) -> tuple[nnx.Module, nnx.Optimizer]:
+  def restore_best_fn(optimizer: nnx.Optimizer) -> nnx.Optimizer:
     """Restore the best checkpoint.
 
     Args:
-     model: a nnx.Model object
-     optimizer: a nnx.Optimizer object
+     optimizer: a nnx.Optimizer object. Its wrapped model (optimizer.model)
+      and opt_state are both updated in place and returned on the same
+      optimizer instance.
     """
-    graph_def, state = nnx.split(model)
+    graph_def, state = nnx.split(optimizer.model)
     opt_def, opt_state = nnx.split(optimizer.opt_state)
     try:
       logging.info("trying to restore best checkpoint")
@@ -96,22 +95,21 @@ def get_default_checkpointer(
           opt_state=ocp.args.StandardRestore(nnx.eval_shape(lambda: opt_state)),
         ),
       )
-      model = nnx.merge(graph_def, restored["state"])
+      optimizer.model = nnx.merge(graph_def, restored["state"])
       optimizer.opt_state = nnx.merge(opt_def, restored["opt_state"])
     except FileNotFoundError:
       logging.warning("could not find checkpoint. resuming with blank state")
-    return model, optimizer
+    return optimizer
 
-  def restore_last_fn(
-    model: nnx.Module, optimizer: nnx.Optimizer
-  ) -> tuple[nnx.Module, nnx.Optimizer]:
+  def restore_last_fn(optimizer: nnx.Optimizer) -> nnx.Optimizer:
     """Restore the latest training checkpoint.
 
     Args:
-     model: a nnx.Model object
-     optimizer: a nnx.Optimizer object
+     optimizer: a nnx.Optimizer object. Its wrapped model (optimizer.model)
+      and opt_state are both updated in place and returned on the same
+      optimizer instance.
     """
-    graphdef, state = nnx.split(model)
+    graphdef, state = nnx.split(optimizer.model)
     optdef, opt_state = nnx.split(optimizer.opt_state)
     state = nnx.eval_shape(lambda: state)
     opt_state = nnx.eval_shape(lambda: opt_state)
@@ -120,10 +118,10 @@ def get_default_checkpointer(
       restored = checkpointer.restore(
         os.path.join(outfolder, "last"), (state, opt_state)
       )
-      model = nnx.merge(graphdef, restored[0])
+      optimizer.model = nnx.merge(graphdef, restored[0])
       optimizer.opt_state = nnx.merge(optdef, restored[1])
     except FileNotFoundError:
       logging.warning("could not find checkpoint. resuming with blank state")
-    return model, optimizer
+    return optimizer
 
   return save_fn, restore_best_fn, restore_last_fn
