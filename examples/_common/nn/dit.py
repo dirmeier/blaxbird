@@ -131,6 +131,7 @@ class DiT(nnx.Module):
     n_heads: int,
     n_embedding_features=256,
     dropout_rate=0.0,
+    n_classes: int | None = None,
     *,
     rngs: nnx.rnglib.Rngs,
   ):
@@ -144,12 +145,21 @@ class DiT(nnx.Module):
       n_heads: integer
       n_embedding_features: integer
       dropout_rate: float
+      n_classes: number of classes to condition on, or None for an
+        unconditional model. When set, __call__ requires a `context`
+        argument of integer class labels; when None, __call__ requires
+        `context=None`.
       rngs: random keys
     """
     self.image_size = image_size
     self.n_in_channels = image_size[-1]
     self.n_embedding_features = n_embedding_features
     self.patch_size = patch_size
+    self.n_classes = n_classes
+    if n_classes is not None:
+      self.class_embedding = nnx.Embed(
+        n_classes, n_embedding_features, rngs=rngs
+      )
     self.time_embedding = nnx.Sequential(
       nnx.Linear(n_embedding_features, n_embedding_features, rngs=rngs),
       nnx.swish,
@@ -226,21 +236,39 @@ class DiT(nnx.Module):
     Args:
       inputs: input in image form
       times: one-dimensional array
-      context: conditioning variable in image form
+      context: integer class labels, shape (batch,), required if this DiT
+        was constructed with n_classes set; must be None otherwise.
 
     Returns:
-      returns a jax
+      returns a jax.Array, same shape as `inputs`
+
+    Raises:
+      ValueError: if `context` is None but n_classes was set, or if
+        `context` is given but n_classes was not set.
     """
+    if self.n_classes is not None and context is None:
+      raise ValueError(
+        "this DiT was constructed with n_classes set, so context "
+        "(integer class labels) must be provided"
+      )
+    if self.n_classes is None and context is not None:
+      raise ValueError(
+        "this DiT was constructed without n_classes, so context must "
+        "be None -- pass n_classes at construction to condition on it"
+      )
+
     hidden = self._patchify(inputs)
     hidden = self._embed(hidden)
-    times = self.time_embedding(
+    embedding = self.time_embedding(
       timestep_embedding(times, self.n_embedding_features)
     )
+    if context is not None:
+      embedding = embedding + self.class_embedding(context)
 
     for block in self.dit_blocks:
-      hidden = block(hidden, context=times)
+      hidden = block(hidden, context=embedding)
 
-    hidden = self.out_projection(hidden, times)
+    hidden = self.out_projection(hidden, embedding)
     outputs = self._unpatchify(hidden)
     return outputs
 
