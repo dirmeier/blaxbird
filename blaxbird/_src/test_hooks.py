@@ -1,8 +1,12 @@
+import itertools
+
 import jax.numpy as jnp
+import optax
 from flax import nnx
 from jax import random as jr
 
 from blaxbird._src.hooks import get_ema_hook
+from blaxbird._src.trainer import train_fn
 
 
 class _Linear(nnx.Module):
@@ -48,10 +52,48 @@ def test_ema_model_is_usable():
 
 
 def test_ema_hook_ignores_extra_trainer_kwargs():
-  """trainer.py calls every hook as h(step, model=, optimizer=,
+  """Verify hook_fn tolerates trainer.py's full kwarg set.
+
+  trainer.py calls every hook as h(step, model=, optimizer=,
   metrics=) -- hook_fn must accept and ignore the kwargs it doesn't
-  use."""
+  use.
+  """
   model = _Linear(rngs=nnx.rnglib.Rngs(jr.key(0)))
   optimizer_stub = object()
   hook_fn, _ = get_ema_hook(model, decay=0.9)
   hook_fn(0, model=model, optimizer=optimizer_stub, metrics={"train/loss": 1.0})
+
+
+def _dummy_step(model, rng_key, batch, **kwargs):
+  del rng_key, kwargs
+
+  def loss_fn(model):
+    return jnp.mean((model(batch["x"]) - batch["y"]) ** 2)
+
+  return nnx.value_and_grad(loss_fn)(model)
+
+
+def _dummy_val(model, rng_key, batch, **kwargs):
+  del rng_key, kwargs
+  return jnp.mean((model(batch["x"]) - batch["y"]) ** 2)
+
+
+def test_ema_hook_integrates_with_train_fn():
+  model = _Linear(rngs=nnx.rnglib.Rngs(jr.key(0)))
+  optimizer = nnx.Optimizer(model, tx=optax.sgd(1e-2))
+  hook_fn, get_ema_model = get_ema_hook(model, decay=0.9)
+
+  batch = {"x": jnp.ones((4, 4)), "y": jnp.zeros((4, 4))}
+  itr = itertools.cycle([batch])
+
+  train = train_fn(
+    fns=(_dummy_step, _dummy_val),
+    n_steps=3,
+    eval_every_n_steps=1,
+    n_eval_batches=1,
+    hooks=[hook_fn],
+  )
+  train(jr.key(1), optimizer, itr, itr)
+
+  ema_model = get_ema_model(optimizer.model)
+  assert ema_model.linear.kernel.value.shape == (4, 4)
