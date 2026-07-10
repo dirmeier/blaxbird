@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import pytest
 from flax import nnx
@@ -81,3 +82,16 @@ def test_conditional_unet_missing_context_raises():
   times = jnp.array([0.1, 0.5])
   with pytest.raises(ValueError, match="context"):
     model(inputs, times, context=None)
+
+
+def test_unet_gradients_are_nonzero():
+  model = _make_unet(n_classes=None)
+  inputs = jnp.ones((2, 32, 32, 3))
+  times = jnp.array([0.1, 0.5])
+
+  def loss_fn(model):
+    return jnp.mean(model(inputs, times, context=None) ** 2)
+
+  grads = nnx.grad(loss_fn)(model)
+  leaves = jax.tree_util.tree_leaves(grads)
+  assert all(jnp.any(leaf != 0) for leaf in leaves if leaf.size > 0)
