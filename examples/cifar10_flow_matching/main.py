@@ -65,7 +65,10 @@ def visualize_hook(sample_fn, val_iter, hook_every_n_steps, log_to_wandb):
     all_samples = []
     for i, batch in enumerate(val_iter):
       samples = sample_fn(
-        model, jr.fold_in(jr.key(step), i), sample_shape=batch["inputs"].shape
+        model,
+        jr.fold_in(jr.key(step), i),
+        sample_shape=batch["inputs"].shape,
+        context=batch["context"],
       )
       all_samples.append(samples)
       if len(all_samples) * all_samples[0].shape[0] >= n_row * n_col:
@@ -101,7 +104,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches, dit_type, log_to_wandb):
   )
 
   model = getattr(dit, dit_type)(
-    image_size=(32, 32, 3), rngs=nnx.rnglib.Rngs(jr.key(1))
+    image_size=(32, 32, 3), n_classes=10, rngs=nnx.rnglib.Rngs(jr.key(1))
   )
   objective = rfm()
   optimizer = get_optimizer(model)
