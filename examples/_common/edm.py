@@ -5,6 +5,7 @@ from jax import random as jr
 
 from _common import samplers
 from _common.parameterizations import EDMConfig
+from blaxbird._src._types import ObjectiveFns
 
 
 def edm(config: EDMConfig):
@@ -47,4 +48,6 @@ def edm(config: EDMConfig):
     return loss_fn(model, rng_key, batch)
 
   sampler = samplers.get_sampler_fn(config.sampler)(config)
-  return train_step, val_step, sampler
+  return ObjectiveFns(
+    train_step=train_step, val_step=val_step, sample_fn=sampler
+  )
