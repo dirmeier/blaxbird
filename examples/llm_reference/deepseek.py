@@ -24,7 +24,7 @@ import jax
 from flax import nnx
 from jax import numpy as jnp
 
-from layers import RMSNorm, apply_rope, rope_freqs, tp_linear
+from layers import GeGLU, RMSNorm, apply_rope, make_causal_mask, rope_freqs, tp_linear
 
 
 class MLAAttention(nnx.Module):
@@ -134,3 +134,127 @@ class MLAAttention(nnx.Module):
       b, s, self.n_heads * self.head_dim_nope
     )
     return self.o_proj(out)
+
+
+class DeepSeekTransformerBlock(nnx.Module):
+  """Pre-norm transformer block: MLA attention + dense GeGLU FFN."""
+
+  def __init__(self, d_model, n_heads, d_latent, head_dim_nope, head_dim_rope, d_ff, *, rngs):
+    """Construct a DeepSeek transformer block.
+
+    Args:
+      d_model: model (residual stream) dimensionality.
+      n_heads: number of attention heads.
+      d_latent: compressed KV/Q latent dimensionality.
+      head_dim_nope: per-head content dimensionality.
+      head_dim_rope: per-head decoupled-RoPE dimensionality.
+      d_ff: feed-forward hidden dimensionality.
+      rngs: random keys.
+    """
+    self.attn_norm = RMSNorm(d_model, rngs=rngs)
+    self.attn = MLAAttention(
+      d_model, n_heads, d_latent, head_dim_nope, head_dim_rope, rngs=rngs
+    )
+    self.ffn_norm = RMSNorm(d_model, rngs=rngs)
+    self.ffn = GeGLU(d_model, d_ff, rngs=rngs)
+
+  def __call__(
+    self, x: jax.Array, positions: jax.Array, mask: jax.Array
+  ) -> jax.Array:
+    """Apply the block.
+
+    Args:
+      x: input array, shape (batch, seq, d_model).
+      positions: integer position ids, shape (batch, seq).
+      mask: bool attention mask, shape (seq, seq).
+
+    Returns:
+      jax.Array, same shape as x.
+    """
+    x = x + self.attn(self.attn_norm(x), positions, mask)
+    x = x + self.ffn(self.ffn_norm(x))
+    return x
+
+
+class DeepSeekLLM(nnx.Module):
+  """Decoder-only transformer using DeepSeek-V2-style Multi-head Latent
+  Attention. Full causal attention only (no local/global interleaving --
+  that's a Gemma-specific trait, not part of MLA). Dense FFN only (no
+  MoE -- that's MixtralSMoE's role in this suite)."""
+
+  def __init__(  # noqa: PLR0913
+    self,
+    vocab_size,
+    d_model,
+    n_layers,
+    n_heads,
+    d_latent,
+    head_dim_nope,
+    head_dim_rope,
+    d_ff,
+    *,
+    rngs,
+  ):
+    """Construct a DeepSeekLLM.
+
+    Args:
+      vocab_size: token vocabulary size.
+      d_model: model (residual stream) dimensionality.
+      n_layers: number of transformer blocks.
+      n_heads: number of attention heads.
+      d_latent: compressed KV/Q latent dimensionality.
+      head_dim_nope: per-head content dimensionality.
+      head_dim_rope: per-head decoupled-RoPE dimensionality.
+      d_ff: feed-forward hidden dimensionality.
+      rngs: random keys.
+    """
+    self.embed = nnx.Embed(
+      vocab_size,
+      d_model,
+      embedding_init=nnx.with_partitioning(
+        nnx.initializers.normal(), ("fsdp", None)
+      ),
+      rngs=rngs,
+    )
+    self.blocks = tuple(
+      DeepSeekTransformerBlock(
+        d_model, n_heads, d_latent, head_dim_nope, head_dim_rope, d_ff, rngs=rngs
+      )
+      for _ in range(n_layers)
+    )
+    self.final_norm = RMSNorm(d_model, rngs=rngs)
+    self.lm_head = nnx.Linear(
+      d_model,
+      vocab_size,
+      use_bias=False,
+      kernel_init=nnx.with_partitioning(
+        nnx.initializers.lecun_normal(), ("fsdp", None)
+      ),
+      rngs=rngs,
+    )
+
+  def __call__(
+    self, token_ids: jax.Array, positions: jax.Array
+  ) -> tuple[jax.Array, jax.Array]:
+    """Compute next-token logits for a batch of token sequences.
+
+    Args:
+      token_ids: integer token ids, shape (batch, seq).
+      positions: integer position ids, shape (batch, seq).
+
+    Returns:
+      a tuple (logits, aux_loss): logits has shape
+      (batch, seq, vocab_size); aux_loss is always jnp.array(0.0) (dense
+      model, no MoE).
+    """
+    mask = make_causal_mask(token_ids.shape[1])
+    hidden = self.embed(token_ids)
+    for block in self.blocks:
+      hidden = block(hidden, positions, mask)
+    hidden = self.final_norm(hidden)
+    logits = self.lm_head(hidden)
+    return logits, jnp.array(0.0)
+
+
+def DeepSeekMLA(vocab_size, **kwargs):
+  return DeepSeekLLM(vocab_size, **kwargs)
