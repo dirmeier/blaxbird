@@ -36,14 +36,11 @@ def get_optimizer(
   return nnx.Optimizer(model, tx=tx)
 
 
-def get_sharding():
+def get_mesh():
   num_devices = jax.local_device_count()
-  mesh = jax.sharding.Mesh(
+  return jax.sharding.Mesh(
     mesh_utils.create_device_mesh((num_devices,)), ("data",)
   )
-  model_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec())
-  data_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
-  return model_sharding, data_sharding
 
 
 def metrics_hook(val_iter, hook_every_n_steps):
@@ -104,7 +101,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
   )
   hooks = get_hooks(val_itr, eval_every_n_steps) + [save_fn]
 
-  model_sharding, data_sharding = get_sharding()
+  mesh = get_mesh()
   optimizer = restore_last_fn(optimizer)
 
   train = train_fn(
@@ -112,7 +109,8 @@ def run(n_steps, eval_every_n_steps, n_eval_batches):
     n_steps=n_steps,
     eval_every_n_steps=eval_every_n_steps,
     n_eval_batches=n_eval_batches,
-    shardings=(model_sharding, data_sharding),
+    mesh=mesh,
+    data_partition_spec=jax.sharding.PartitionSpec("data"),
     hooks=hooks,
     log_to_wandb=False,
   )
