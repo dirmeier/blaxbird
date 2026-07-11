@@ -31,7 +31,10 @@ def _step_and_val_fns(fns):
 def train_fn(
   *,
   fns: tuple[Callable, Callable],
-  shardings: tuple[jax.NamedSharding, jax.NamedSharding] | None = None,
+  mesh: jax.sharding.Mesh | None = None,
+  data_partition_spec: jax.sharding.PartitionSpec = (
+    jax.sharding.PartitionSpec()
+  ),
   n_steps: int,
   eval_every_n_steps: int,
   n_eval_batches: int,
@@ -44,8 +47,16 @@ def train_fn(
     fns: a tuple of two callables. The first one is used as a step function
       , i.e., function to do gradient steps. The second one is used as an
       validation function.
-    shardings: a tuple of shardings, the first one for the model, the second
-      one for the data.
+    mesh: a jax.sharding.Mesh to shard training over, or None to run
+      unsharded on a single device. Per-parameter sharding is derived
+      from each parameter's own nnx.with_partitioning annotation (see
+      flax.nnx docs) via nnx.get_named_sharding -- parameters without
+      such an annotation default to fully replicated, so passing a mesh
+      with no annotated parameters gives plain data parallelism.
+    data_partition_spec: how to shard each training/eval batch across
+      `mesh`. Defaults to PartitionSpec() (fully replicated); pass e.g.
+      PartitionSpec("data") to shard the batch dimension across a mesh
+      axis named "data".
     n_steps: number of training/gradient steps
     eval_every_n_steps: specified how often to compute validation statistics.
     n_eval_batches: number of batches to use for validation
@@ -79,10 +90,11 @@ def train_fn(
     model = optimizer.model
     # get train and val fns
     step_fn, eval_fn = _step_and_val_fns(fns)
-    # get model and replicate
-    state = nnx.state((model, optimizer))
-    if shardings is not None:
-      state = jax.device_put(state, shardings[0])
+    # get model and shard
+    if mesh is not None:
+      state = nnx.state((model, optimizer))
+      sharding = nnx.get_named_sharding(state, mesh)
+      state = jax.device_put(state, sharding)
       nnx.update((model, optimizer), state)
     # metrics
     metrics = nnx.MultiMetric(loss=nnx.metrics.Average("loss"))
@@ -91,8 +103,10 @@ def train_fn(
     step_key, rng_key = jr.split(rng_key)
     for step, batch in zip(range(1, n_steps + 1), train_itr):
       train_key, val_key = jr.split(jr.fold_in(step_key, step))
-      if shardings is not None:
-        batch = jax.device_put(batch, shardings[1])
+      if mesh is not None:
+        batch = jax.device_put(
+          batch, jax.NamedSharding(mesh, data_partition_spec)
+        )
       # do a gradient step
       step_fn(
         model=model,
@@ -110,8 +124,10 @@ def train_fn(
           metrics_history[f"train/{metric}"] = float(value)
         # do evaluation loop
         for val_idx, batch in zip(range(n_eval_batches), val_itr):
-          if shardings is not None:
-            batch = jax.device_put(batch, shardings[1])
+          if mesh is not None:
+            batch = jax.device_put(
+              batch, jax.NamedSharding(mesh, data_partition_spec)
+            )
           eval_fn(
             model=model,
             rng_key=jr.fold_in(val_key, val_idx),
