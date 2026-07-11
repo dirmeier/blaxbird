@@ -61,7 +61,7 @@ train = train_fn(
   eval_every_n_steps=10,
   n_eval_batches=10
 )
-train(jr.key(2), model, optimizer, train_itr, val_itr)
+train(jr.key(2), optimizer, train_itr, val_itr)
 ```
 
 See the entire self-contained example in [examples/mnist_classification](examples/mnist_classification).
@@ -74,7 +74,8 @@ See the entire self-contained example in [examples/mnist_classification](example
 def train_fn(
   *,
   fns: tuple[Callable, Callable],
-  shardings: Optional[tuple[jax.NamedSharding, jax.NamedSharding]] = None,
+  mesh: jax.sharding.Mesh | None = None,
+  data_partition_spec: jax.sharding.PartitionSpec = jax.sharding.PartitionSpec(),
   n_steps: int,
   eval_every_n_steps: int,
   n_eval_batches: int,
@@ -83,6 +84,8 @@ def train_fn(
 ) -> Callable:
   ...
 ```
+
+The returned `train` callable has signature `train(rng_key, optimizer, train_itr, val_itr) -> None` -- it derives the model from `optimizer.model`, so there is no separate `model` argument.
 
 We briefly explain the more ambiguous argument types below.
 
@@ -108,25 +111,39 @@ The loss function that is called by both computes a *scalar* loss value. B
 While `train_step` returns has to return the loss and gradients, `val_step` only needs
 to return the loss.
 
-### `shardings`
+### `mesh` and `data_partition_spec`
 
 To specify how data and model weights are distributed over devices and processes,
 `blaxbird` uses JAX' [sharding](https://docs.jax.dev/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html) functionality.
 
-`shardings` is again specified by a tuple, one for the model sharding, the other for the data sharding.
-An example is shown below, where we only distributed the data over `num_devices` devices.
-You can, if you don't want to distribute anything, just set the argument to `None` or not specify it.
+`mesh` is a `jax.sharding.Mesh` describing your device topology. Per-parameter
+sharding is derived from each parameter's own `nnx.with_partitioning`
+annotation (see the [flax.nnx docs](https://flax.readthedocs.io/en/latest/)) via
+`nnx.get_named_sharding` -- parameters without such an annotation default to
+fully replicated, so a mesh with no annotated parameters gives plain data
+parallelism. `data_partition_spec` controls how each training/eval batch is
+sharded across `mesh` (defaults to `PartitionSpec()`, fully replicated).
+You can, if you don't want to distribute anything, just leave `mesh` as `None`
+or not specify it.
+
+An example is shown below, sharding only the data over `num_devices` devices
+(the model has no `with_partitioning` annotations, so it stays fully
+replicated):
 
 ```python
-def get_sharding():
+def get_mesh():
   num_devices = jax.local_device_count()
-  mesh = jax.sharding.Mesh(
+  return jax.sharding.Mesh(
     mesh_utils.create_device_mesh((num_devices,)), ("data",)
   )
-  model_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec())
-  data_sharding = jax.NamedSharding(mesh, jax.sharding.PartitionSpec("data"))
-  return model_sharding, data_sharding
+
+mesh = get_mesh()
 ```
+
+Pass `mesh=mesh, data_partition_spec=jax.sharding.PartitionSpec("data")` to
+`train_fn`. For real FSDP/tensor-parallel sharding, annotate your model's
+layers with `nnx.with_partitioning` -- see
+[examples/fsdp_tp_demo](examples/fsdp_tp_demo) for a worked 2D-mesh example.
 
 ### `hooks`
 
@@ -224,13 +241,18 @@ You can then do either of:
 model = CNN(rngs=nnx.rnglib.Rngs(jr.key(1)))
 optimizer = nnx.Optimizer(model, optax.adam(1e-4))
 
-model, optimizer = restore_best(model, optimizer)
-model, optimizer = restore_last(model, optimizer)
+optimizer = restore_best(optimizer)
+optimizer = restore_last(optimizer)
 ```
+
+`restore_best`/`restore_last` take and return `optimizer` only -- the wrapped
+model (`optimizer.model`) and `opt_state` are both updated in place on the
+same optimizer instance, since `nnx.Optimizer` already owns the model it
+wraps.
 
 ### Doing training
 
-After having defined train functions, hooks and shardings, you can train your model like this:
+After having defined train functions, hooks and a mesh, you can train your model like this:
 
 ```python
 train = train_fn(
@@ -238,11 +260,12 @@ train = train_fn(
   n_steps=n_steps,
   eval_every_n_steps=eval_every_n_steps,
   n_eval_batches=n_eval_batches,
-  shardings=(model_sharding, data_sharding),
+  mesh=mesh,
+  data_partition_spec=jax.sharding.PartitionSpec("data"),
   hooks=hooks,
   log_to_wandb=False,
 )
-train(jr.key(1), model, optimizer, train_itr, val_itr)
+train(jr.key(1), optimizer, train_itr, val_itr)
 ```
 
 Self-contained examples that also explain how the data loaders should look like can be found
