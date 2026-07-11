@@ -18,6 +18,8 @@ import jax
 from flax import nnx
 from jax import numpy as jnp
 
+from layers import GQAAttention, RMSNorm, make_causal_mask
+
 
 class SparseMoEFFN(nnx.Module):
   """Mixtral-style top-k-routed mixture-of-experts feed-forward block
@@ -126,3 +128,136 @@ class SparseMoEFFN(nnx.Module):
     aux_loss = self.n_experts * jnp.sum(density * chosen_frac)
 
     return combined.reshape(b, s, d), aux_loss
+
+
+class MixtralTransformerBlock(nnx.Module):
+  """Pre-norm transformer block: GQA attention (full causal only) +
+  sparse MoE FFN."""
+
+  def __init__(  # noqa: PLR0913
+    self, d_model, n_heads, n_kv_heads, head_dim, d_ff, n_experts, n_active, *, rngs
+  ):
+    """Construct a Mixtral transformer block.
+
+    Args:
+      d_model: model (residual stream) dimensionality.
+      n_heads: number of query heads.
+      n_kv_heads: number of key/value heads.
+      head_dim: dimensionality of each attention head.
+      d_ff: feed-forward hidden dimensionality of each expert.
+      n_experts: total experts.
+      n_active: active experts per token (top-k).
+      rngs: random keys.
+    """
+    self.attn_norm = RMSNorm(d_model, rngs=rngs)
+    self.attn = GQAAttention(d_model, n_heads, n_kv_heads, head_dim, rngs=rngs)
+    self.ffn_norm = RMSNorm(d_model, rngs=rngs)
+    self.ffn = SparseMoEFFN(d_model, d_ff, n_experts, n_active, rngs=rngs)
+
+  def __call__(
+    self, x: jax.Array, positions: jax.Array, mask: jax.Array
+  ) -> tuple[jax.Array, jax.Array]:
+    """Apply the block.
+
+    Args:
+      x: input array, shape (batch, seq, d_model).
+      positions: integer position ids, shape (batch, seq).
+      mask: bool attention mask, shape (seq, seq).
+
+    Returns:
+      a tuple (output, aux_loss): output has the same shape as x.
+    """
+    x = x + self.attn(self.attn_norm(x), positions, mask)
+    ffn_out, aux_loss = self.ffn(self.ffn_norm(x))
+    return x + ffn_out, aux_loss
+
+
+class MixtralLLM(nnx.Module):
+  """Decoder-only transformer with real sparse top-k expert routing.
+  Full causal attention only (no local/global interleaving -- that's a
+  Gemma-specific trait)."""
+
+  def __init__(  # noqa: PLR0913
+    self,
+    vocab_size,
+    d_model,
+    n_layers,
+    n_heads,
+    n_kv_heads,
+    head_dim,
+    d_ff,
+    n_experts,
+    n_active,
+    *,
+    aux_loss_coef=0.01,
+    rngs,
+  ):
+    """Construct a MixtralLLM.
+
+    Args:
+      vocab_size: token vocabulary size.
+      d_model: model (residual stream) dimensionality.
+      n_layers: number of transformer blocks.
+      n_heads: number of query heads.
+      n_kv_heads: number of key/value heads.
+      head_dim: dimensionality of each attention head.
+      d_ff: feed-forward hidden dimensionality of each expert.
+      n_experts: total experts per block.
+      n_active: active experts per token (top-k) per block.
+      aux_loss_coef: weight applied to each block's load-balancing
+        aux_loss before summing across blocks.
+      rngs: random keys.
+    """
+    self.aux_loss_coef = aux_loss_coef
+    self.embed = nnx.Embed(
+      vocab_size,
+      d_model,
+      embedding_init=nnx.with_partitioning(
+        nnx.initializers.normal(), ("fsdp", None)
+      ),
+      rngs=rngs,
+    )
+    self.blocks = tuple(
+      MixtralTransformerBlock(
+        d_model, n_heads, n_kv_heads, head_dim, d_ff, n_experts, n_active, rngs=rngs
+      )
+      for _ in range(n_layers)
+    )
+    self.final_norm = RMSNorm(d_model, rngs=rngs)
+    self.lm_head = nnx.Linear(
+      d_model,
+      vocab_size,
+      use_bias=False,
+      kernel_init=nnx.with_partitioning(
+        nnx.initializers.lecun_normal(), ("fsdp", None)
+      ),
+      rngs=rngs,
+    )
+
+  def __call__(
+    self, token_ids: jax.Array, positions: jax.Array
+  ) -> tuple[jax.Array, jax.Array]:
+    """Compute next-token logits for a batch of token sequences.
+
+    Args:
+      token_ids: integer token ids, shape (batch, seq).
+      positions: integer position ids, shape (batch, seq).
+
+    Returns:
+      a tuple (logits, aux_loss): logits has shape
+      (batch, seq, vocab_size); aux_loss is aux_loss_coef times the
+      summed per-block load-balancing loss.
+    """
+    mask = make_causal_mask(token_ids.shape[1])
+    hidden = self.embed(token_ids)
+    total_aux_loss = jnp.array(0.0)
+    for block in self.blocks:
+      hidden, aux_loss = block(hidden, positions, mask)
+      total_aux_loss = total_aux_loss + aux_loss
+    hidden = self.final_norm(hidden)
+    logits = self.lm_head(hidden)
+    return logits, self.aux_loss_coef * total_aux_loss
+
+
+def MixtralSMoE(vocab_size, **kwargs):
+  return MixtralLLM(vocab_size, **kwargs)
