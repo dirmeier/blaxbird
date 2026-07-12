@@ -52,8 +52,14 @@ def test_gemma_dense_gradients_are_nonzero():
   reason="needs XLA_FLAGS=--xla_force_host_platform_device_count=4",
 )
 def test_gemma_dense_shards_across_2d_mesh():
+  # explicit devices=jax.devices()[:4]: create_device_mesh requires the
+  # mesh_shape's product to equal the device count exactly, but the
+  # skipif above only guarantees >= 4 -- slicing to exactly 4 keeps this
+  # test passing under XLA_FLAGS=...device_count=8 too (used by other
+  # tests in this suite), not just exactly 4.
   mesh = jax.sharding.Mesh(
-    mesh_utils.create_device_mesh((2, 2)), ("fsdp", "tp")
+    mesh_utils.create_device_mesh((2, 2), devices=jax.devices()[:4]),
+    ("fsdp", "tp"),
   )
   with mesh:
     model = GemmaDense(vocab_size=100, **_tiny_kwargs())
