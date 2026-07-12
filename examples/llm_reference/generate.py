@@ -1,5 +1,5 @@
-"""Greedy/sampled autoregressive generation, shared across every model
-family in this suite. Recomputes the full prefix on every decoding step
+"""Sampled autoregressive generation, shared across every model family in
+this suite. Recomputes the full prefix on every decoding step
 rather than threading an explicit KV cache -- O(n^2) in sequence length,
 the right tradeoff for reference/test code on tiny sequences, not a
 production serving path (applies even to DeepSeekMLA, where a real cache
