@@ -1,6 +1,6 @@
 """blaxbird: A high-level API for building and training Flax NNX models."""
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 from blaxbird._src.checkpointer import get_default_checkpointer
 from blaxbird._src.hooks import get_ema_hook
