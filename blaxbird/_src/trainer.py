@@ -1,26 +1,32 @@
+import types
 from collections.abc import Callable, Iterable
 
 import jax
-import wandb
 from absl import logging
 from flax import nnx
 from jax import random as jr
 
+wandb: types.ModuleType | None
+try:
+  import wandb
+except ImportError:
+  wandb = None
+
 
 # ruff: noqa: ANN001, ANN202, ANN003
 def _step_and_val_fns(fns):
-  step, eval = fns
+  step_fn, eval_fn = fns
 
   def _train_step(model, rng_key, optimizer, metrics, batch, **kwargs):
     model.train()
-    loss, grads = step(model, rng_key, batch, **kwargs)
+    loss, grads = step_fn(model, rng_key, batch, **kwargs)
     optimizer.update(grads)
     metrics.update(loss=loss)
     return {"loss": loss}
 
   def _eval_step(model, rng_key, metrics, batch, **kwargs):
     model.eval()
-    loss = eval(model, rng_key, batch, **kwargs)
+    loss = eval_fn(model, rng_key, batch, **kwargs)
     metrics.update(loss=loss)
     return {"loss": loss}
 
@@ -32,9 +38,7 @@ def train_fn(
   *,
   fns: tuple[Callable, Callable],
   mesh: jax.sharding.Mesh | None = None,
-  data_partition_spec: jax.sharding.PartitionSpec = (
-    jax.sharding.PartitionSpec()
-  ),
+  data_partition_spec: jax.sharding.PartitionSpec | None = None,
   n_steps: int,
   eval_every_n_steps: int,
   n_eval_batches: int,
@@ -60,12 +64,45 @@ def train_fn(
     n_steps: number of training/gradient steps
     eval_every_n_steps: specified how often to compute validation statistics.
     n_eval_batches: number of batches to use for validation
-    log_to_wandb: whether to log results to wandb or not
+    log_to_wandb: whether to log results to wandb or not. Requires the
+      optional `wandb` package to be installed.
     hooks: iterable of hooks
+
+  Example:
+    ```python
+    import optax
+    from flax import nnx
+    from jax import random as jr
+
+    model = CNN(rngs=nnx.rnglib.Rngs(jr.key(1)))
+    optimizer = nnx.Optimizer(model, optax.adam(1e-4))
+
+    train = train_fn(
+      fns=(train_step, val_step),
+      n_steps=100,
+      eval_every_n_steps=10,
+      n_eval_batches=10,
+    )
+    train(jr.key(2), optimizer, train_itr, val_itr)
+    ```
+
+  Raises:
+    ImportError: if log_to_wandb is True but wandb is not installed.
 
   Returns:
     returns a callable for training
   """
+  if log_to_wandb and wandb is None:
+    raise ImportError(
+      "log_to_wandb=True requires the 'wandb' package. Install it with "
+      "`pip install wandb`."
+    )
+  _wandb = wandb
+  _data_partition_spec = (
+    data_partition_spec
+    if data_partition_spec is not None
+    else jax.sharding.PartitionSpec()
+  )
 
   def train(
     rng_key: jax.Array,
@@ -101,11 +138,11 @@ def train_fn(
     metrics_history = {}
     # run training
     step_key, rng_key = jr.split(rng_key)
-    for step, batch in zip(range(1, n_steps + 1), train_itr):
+    for step, batch in zip(range(1, n_steps + 1), train_itr, strict=False):
       train_key, val_key = jr.split(jr.fold_in(step_key, step))
       if mesh is not None:
         batch = jax.device_put(
-          batch, jax.NamedSharding(mesh, data_partition_spec)
+          batch, jax.NamedSharding(mesh, _data_partition_spec)
         )
       # do a gradient step
       step_fn(
@@ -121,12 +158,18 @@ def train_fn(
       if step % eval_every_n_steps == 0 or is_first_or_last_step:
         # store training losses
         for metric, value in metrics.compute().items():
-          metrics_history[f"train/{metric}"] = float(value)
+          # nnx.MultiMetric.compute()'s Metric return type is a stub
+          # imprecision -- the runtime value is a scalar array.
+          metrics_history[f"train/{metric}"] = float(
+            value  # type: ignore[arg-type]
+          )
         # do evaluation loop
-        for val_idx, batch in zip(range(n_eval_batches), val_itr):
+        for val_idx, batch in zip(
+          range(n_eval_batches), val_itr, strict=False
+        ):
           if mesh is not None:
             batch = jax.device_put(
-              batch, jax.NamedSharding(mesh, data_partition_spec)
+              batch, jax.NamedSharding(mesh, _data_partition_spec)
             )
           eval_fn(
             model=model,
@@ -136,7 +179,11 @@ def train_fn(
           )
         # store val losses
         for metric, value in metrics.compute().items():
-          metrics_history[f"val/{metric}"] = float(value)
+          # nnx.MultiMetric.compute()'s Metric return type is a stub
+          # imprecision -- the runtime value is a scalar array.
+          metrics_history[f"val/{metric}"] = float(
+            value  # type: ignore[arg-type]
+          )
         metrics.reset()
         # log losses after each val round
         if jax.process_index() == 0:
@@ -146,7 +193,8 @@ def train_fn(
             f"{metrics_history['val/loss']}"
           )
         if log_to_wandb and jax.process_index() == 0:
-          wandb.log(metrics_history, step=step)
+          assert _wandb is not None  # validated in train_fn above
+          _wandb.log(metrics_history, step=step)
       for h in hooks:
         h(step, model=model, optimizer=optimizer, metrics=metrics_history)
 

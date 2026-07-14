@@ -52,12 +52,6 @@ def test_ema_model_is_usable():
 
 
 def test_ema_hook_ignores_extra_trainer_kwargs():
-  """Verify hook_fn tolerates trainer.py's full kwarg set.
-
-  trainer.py calls every hook as h(step, model=, optimizer=,
-  metrics=) -- hook_fn must accept and ignore the kwargs it doesn't
-  use.
-  """
   model = _Linear(rngs=nnx.rnglib.Rngs(jr.key(0)))
   optimizer_stub = object()
   hook_fn, _ = get_ema_hook(model, decay=0.9)

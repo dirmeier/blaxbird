@@ -17,6 +17,5 @@ def test_objective_fns_fields_are_named():
   assert fns.train_step is train_step
   assert fns.val_step is val_step
   assert fns.sample_fn is sample_fn
-  # still unpacks positionally like a plain tuple
   a, b, c = fns
   assert (a, b, c) == (train_step, val_step, sample_fn)

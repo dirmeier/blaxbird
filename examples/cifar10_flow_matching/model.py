@@ -1,25 +1,88 @@
+from collections.abc import Callable
+
 import jax
 from einops import rearrange
 from flax import nnx
 from jax import numpy as jnp
 
-from _common.nn.embedding import timestep_embedding
-from _common.nn.mlp import MLP
 
-
-def _modulate(inputs, shift, scale):  # noqa: ANN001, ANN202
-  return inputs * (1.0 + scale[:, None]) + shift[:, None]
-
-
-def get_sinusoidal_embedding_1d(length, embedding_dim):  # noqa: ANN001, ANN202
-  emb = timestep_embedding(length.reshape(-1), embedding_dim)
+def timestep_embedding(timesteps, embedding_dim: int, dtype=jnp.float32):
+  half = embedding_dim // 2
+  freqs = jnp.exp(-jnp.log(10_000) * jnp.arange(0, half) / half)
+  emb = timesteps.astype(dtype)[:, None] * freqs[None, ...]
+  emb = jnp.concatenate([jnp.sin(emb), jnp.cos(emb)], axis=1)
   return emb
 
 
-def sinusoidal_init(shape, dtype):  # noqa: ANN001, ANN202
-  def get_sinusoidal_embedding_2d(grid, embedding_dim):  # noqa: ANN001, ANN202
-    emb_h = get_sinusoidal_embedding_1d(grid[0], embedding_dim // 2)
-    emb_w = get_sinusoidal_embedding_1d(grid[1], embedding_dim // 2)
+class MLP(nnx.Module):
+  def __init__(
+    self,
+    in_features: int,
+    output_features: tuple[int, ...],
+    *,
+    kernel_init: nnx.initializers.Initializer = nnx.initializers.lecun_normal(),
+    bias_init: nnx.initializers.Initializer = nnx.initializers.zeros_init(),
+    use_bias: bool = True,
+    dropout_rate: float | None = None,
+    activation: Callable[[jax.Array], jax.Array] = jax.nn.silu,
+    activate_last: bool = False,
+    rngs: nnx.rnglib.Rngs,
+  ):
+    features = [in_features] + list(output_features)
+    layers = []
+    for din, dout in zip(features[:-1], features[1:], strict=True):
+      layers.append(
+        nnx.Linear(
+          in_features=din,
+          out_features=dout,
+          kernel_init=kernel_init,
+          bias_init=bias_init,
+          use_bias=use_bias,
+          rngs=rngs,
+        )
+      )
+    self.layers = tuple(layers)
+    self.dropout_rate = dropout_rate
+    self.activate_last = activate_last
+    self.activation = activation
+    if dropout_rate is not None:
+      self.dropout_layer = nnx.Dropout(dropout_rate, rngs=rngs)
+
+  def __call__(self, inputs: jax.Array):
+    """Project inputs through the MLP.
+
+    Args:
+      inputs: jax.Array
+
+    Returns:
+      jax.Array
+    """
+    num_layers = len(self.layers)
+
+    out = inputs
+    for i, layer in enumerate(self.layers):
+      out = layer(out)
+      if i < num_layers - 1 or self.activate_last:
+        if self.dropout_rate is not None:
+          out = self.dropout_layer(out)
+        out = self.activation(out)
+    return out
+
+
+def _modulate(inputs, shift, scale):
+  return inputs * (1.0 + scale[:, None]) + shift[:, None]
+
+
+def _get_sinusoidal_embedding_1d(length, embedding_dim):
+  return timestep_embedding(length.reshape(-1), embedding_dim)
+
+
+def _sinusoidal_init(shape, dtype):
+  del dtype
+
+  def get_sinusoidal_embedding_2d(grid, embedding_dim):
+    emb_h = _get_sinusoidal_embedding_1d(grid[0], embedding_dim // 2)
+    emb_w = _get_sinusoidal_embedding_1d(grid[1], embedding_dim // 2)
     emb = jnp.concatenate([emb_h, emb_w], axis=1)
     return emb
 
@@ -36,7 +99,7 @@ def sinusoidal_init(shape, dtype):  # noqa: ANN001, ANN202
 
 
 class OutProjection(nnx.Module):
-  def __init__(  # noqa: PLR0913
+  def __init__(
     self, hidden_size, n_embedding_features, patch_size, out_channels, *, rngs
   ):
     super().__init__()
@@ -55,7 +118,7 @@ class OutProjection(nnx.Module):
 
 
 class DiTBlock(nnx.Module):
-  def __init__(  # noqa: PLR0913
+  def __init__(
     self,
     hidden_size: int,
     n_embedding_features: int,
@@ -122,7 +185,7 @@ class DiTBlock(nnx.Module):
 
 
 class DiT(nnx.Module):
-  def __init__(  # noqa: PLR0913
+  def __init__(
     self,
     image_size: tuple[int, int, int],
     n_hidden_channels: int,
@@ -176,7 +239,7 @@ class DiT(nnx.Module):
       rngs=rngs,
     )
     self.patch_embedding = nnx.Param(
-      sinusoidal_init(
+      _sinusoidal_init(
         (
           1,
           image_size[0] // patch_size,
@@ -229,7 +292,10 @@ class DiT(nnx.Module):
     return inputs + jax.lax.stop_gradient(self.patch_embedding.value)
 
   def __call__(
-    self, inputs: jax.Array, times: jax.Array, context: jax.Array = None
+    self,
+    inputs: jax.Array,
+    times: jax.Array,
+    context: jax.Array | None = None,
   ):
     """Transform inputs through the DiT.
 

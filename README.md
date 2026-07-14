@@ -5,8 +5,6 @@
 
 > A high-level API to build and train NNX models
 
-## About
-
 `Blaxbird` [blækbɜːd] is a high-level API to easily build NNX models and train them on CPU or GPU.
 
 Using `blaxbird` one can
@@ -15,12 +13,7 @@ Using `blaxbird` one can
 - distribute data and model weights over multiple processes or GPUs,
 - define hooks that are periodically called during training.
 
-`blaxbird` is a training framework, not a model zoo -- it doesn't ship
-neural network architectures. See [examples](examples) for worked
-end-to-end examples (including a DiT trained with flow matching on
-CIFAR-10) that define their own models and hand them to `blaxbird`.
-
-## Example
+## Quickstart
 
 To use `blaxbird`, one only needs to define a model, a loss function, and train and validation step functions:
 ```python
@@ -64,9 +57,25 @@ train = train_fn(
 train(jr.key(2), optimizer, train_itr, val_itr)
 ```
 
-See the entire self-contained example in [examples/mnist_classification](examples/mnist_classification).
+## Examples
 
-## Usage
+Full self-contained examples can be found in [examples](examples/).
+
+## Installation
+
+To install the package from PyPI, call:
+
+```bash
+pip install blaxbird
+```
+
+To install the latest GitHub <RELEASE>, just call the following on the command line:
+
+```bash
+pip install git+https://github.com/dirmeier/blaxbird@<RELEASE>
+```
+
+## API
 
 `train_fn` is a higher order function with the following signature:
 
@@ -116,15 +125,8 @@ to return the loss.
 To specify how data and model weights are distributed over devices and processes,
 `blaxbird` uses JAX' [sharding](https://docs.jax.dev/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html) functionality.
 
-`mesh` is a `jax.sharding.Mesh` describing your device topology. Per-parameter
-sharding is derived from each parameter's own `nnx.with_partitioning`
-annotation (see the [flax.nnx docs](https://flax.readthedocs.io/en/latest/)) via
-`nnx.get_named_sharding` -- parameters without such an annotation default to
-fully replicated, so a mesh with no annotated parameters gives plain data
-parallelism. `data_partition_spec` controls how each training/eval batch is
-sharded across `mesh` (defaults to `PartitionSpec()`, fully replicated).
-You can, if you don't want to distribute anything, just leave `mesh` as `None`
-or not specify it.
+`mesh` is a `jax.sharding.Mesh` describing your device topology. Per-parameter sharding is derived from each parameter's own `nnx.with_partitioning`
+annotation (see the [flax.nnx docs](https://flax.readthedocs.io/en/latest/)) via `nnx.get_named_sharding` -- parameters without such an annotation default to fully replicated, so a mesh with no annotated parameters gives plain data parallelism. `data_partition_spec` controls how each training/eval batch is sharded across `mesh` (defaults to `PartitionSpec()`, fully replicated). You can, if you don't want to distribute anything, just leave `mesh` as `None` or not specify it.
 
 An example is shown below, sharding only the data over `num_devices` devices
 (the model has no `with_partitioning` annotations, so it stays fully
@@ -221,6 +223,53 @@ hook_save, *_ = get_default_checkpointer(
 )
 ```
 
+#### An EMA `hook`
+
+We provide a hook for tracking an exponential moving average (EMA) of a
+model's weights, constructed via `get_ema_hook`.
+
+The signature is:
+
+```python
+def get_ema_hook(
+  model: nnx.Module, decay: float = 0.999
+) -> tuple[Callable, Callable]
+```
+
+Its arguments are:
+- `model`: the model from which the EMA state is initialized.
+- `decay`: the EMA decay rate.
+
+It returns a tuple `(hook_fn, get_ema_model_fn)`:
+- `hook_fn(step, *, model, **kwargs) -> None`: updates the tracked EMA
+  weights every training step.
+- `get_ema_model_fn(model: nnx.Module) -> nnx.Module`: returns a new,
+  independent `nnx.Module` with the same structure as `model` but with the
+  tracked EMA parameter values.
+
+For instance, you would construct and use the EMA hook like this:
+
+```python
+from blaxbird import get_ema_hook
+
+ema_hook, get_ema_model = get_ema_hook(model, decay=0.999)
+
+train = train_fn(
+  fns=(train_step, val_step),
+  n_steps=n_steps,
+  eval_every_n_steps=eval_every_n_steps,
+  n_eval_batches=n_eval_batches,
+  hooks=[ema_hook],
+)
+train(jr.key(1), optimizer, train_itr, val_itr)
+
+ema_model = get_ema_model(optimizer.model)
+```
+
+Note: EMA state is not integrated with `get_default_checkpointer` --
+saving and restoring EMA state alongside model checkpoints is not
+covered here.
+
 ### Restoring a run
 
 You can also use `get_default_checkpointer` to restart the run where you left off.
@@ -268,23 +317,35 @@ train = train_fn(
 train(jr.key(1), optimizer, train_itr, val_itr)
 ```
 
-Self-contained examples that also explain how the data loaders should look like can be found
-in [examples](examples).
+## Contributing
 
-## Installation
+Contributions in the form of pull requests are more than welcome. A good way to
+start is to check out issues labelled
+[good first issue](https://github.com/dirmeier/surjectors/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
 
-To install the package from PyPI, call:
+In order to contribute:
+
+1) Clone `surjectors` and install `uv` from [here](https://docs.astral.sh/uv/getting-started/installation/).
+2) Install all dependencies using `uv sync --all-groups`.
+3) Install the Git hooks:
+
+   ```bash
+   uv run pre-commit install -t pre-commit -t commit-msg
+   ```
+4) Create a new branch locally, e.g. `git checkout -b feature/my-new-feature`.
+5) Implement your contribution and ideally a test case.
+6) Check your work (see below).
+7) Submit a PR 🙂.
+
+### Development commands
+
+The project uses `uv` for everything:
 
 ```bash
-pip install blaxbird
+uv sync --all-groups
+uv run pytest
+uv run ruff format blaxbird examples
+uv run ruff check --fix blaxbird examples
+uv run mypy blaxbird examples
+uv run pre-commit run --all-files
 ```
-
-To install the latest GitHub <RELEASE>, just call the following on the command line:
-
-```bash
-pip install git+https://github.com/dirmeier/blaxbird@<RELEASE>
-```
-
-## Author
-
-Simon Dirmeier <a href="mailto:simd@mailbox.org">simd@mailbox.org</a>

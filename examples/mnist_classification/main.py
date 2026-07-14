@@ -1,8 +1,5 @@
 import argparse
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dataloader
 import jax
@@ -19,9 +16,6 @@ from blaxbird import get_default_checkpointer, train_fn
 def get_optimizer(
   model, *, peak_lr=1e-4, n_steps, warmup_steps=1000, grad_clip_norm=1.0
 ):
-  # warmup_cosine_decay_schedule requires decay_steps > warmup_steps (the
-  # cosine phase runs over decay_steps - warmup_steps); clamp so a short
-  # n_steps (e.g. a smoke run) doesn't raise ValueError from optax.
   warmup_steps = min(warmup_steps, n_steps // 2)
   schedule = optax.warmup_cosine_decay_schedule(
     init_value=0.0,
