@@ -5,7 +5,7 @@
 
 > A high-level API to build and train NNX models
 
-`Blaxbird` [blækbɜːd] is a high-level API to easily build NNX models and train them on CPU or GPU.
+`Blaxbird` [blæksbɜːd] is a high-level API to easily build NNX models and train them on CPU or GPU.
 
 Using `blaxbird` one can
 - concisely define models and loss functions without the usual JAX/Flax verbosity,
@@ -59,7 +59,7 @@ train(jr.key(2), optimizer, train_itr, val_itr)
 
 ## Examples
 
-Full self-contained examples can be found in [examples](examples/).
+Full self-contained examples (flow matching, small LMs training, ...), can be found in [examples](examples/).
 
 ## Installation
 

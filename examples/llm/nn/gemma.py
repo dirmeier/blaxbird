@@ -1,18 +1,51 @@
-"""Gemma-4-style decoder-only transformer: GQA + dual-frequency p-RoPE
-+ key/value reuse on global layers + interleaved local/global attention
-+ dense GeGLU FFN, TP+FSDP-sharded.
+"""Gemma4-style LM.
 
-Local (sliding-window) layers rotate the full head with RoPE theta=10k.
-Global (full-causal) layers rotate only the leading 25% of the head
-("p-RoPE", theta=1M) and skip a separate value projection, reusing the
-(pre-rotation) key projection as values -- both real Gemma-4 tricks
-that shrink the global-layer KV cache.
+Architecture design:
+  - Attention: grouped-query attention (GQA), n_kv_heads query groups
+    broadcast to n_heads via repeat_kv, softmax over head_dim ** -0.5
+    scaled scores. Queries and keys are RMS-normed per head before RoPE
+    ("QK-norm").
+  - Attention pattern: interleaved local/global layers. Every
+    global_every-th layer (1-indexed, default 4) is "global"; the rest
+    are "local".
+    - local layers: sliding-window causal attention (last local_window
+      positions), full RoPE (rotary_fraction=1.0) at base theta=10k.
+    - global layers: full-causal attention, dual-frequency partial RoPE
+      ("p-RoPE": only the leading 25% of head_dim rotated) at base
+      theta=1M.
+  - KV-cache trick: key/value reuse on global layers -- the value
+    projection is dropped and the (pre-rotation) key projection is reused
+    as values (share_kv), shrinking the global-layer KV cache.
+  - Normalization: RMSNorm (no mean-centering, no bias), pre-norm, with
+    a separate norm before attention and FFN plus a final norm before the
+    head.
+  - FFN: dense GeGLU (gated GELU, column-parallel gate/up, row-parallel
+    down).
+  - Embeddings: untied -- a separate input nnx.Embed and output lm_head.
+  - Residual structure: standard x = x + sublayer(norm(x)).
+  - Sharding: 2D FSDP+TP -- column-parallel q/k/v/gate/up, row-parallel
+    o/down projections; embedding and lm_head kernels FSDP-sharded on the
+    vocab axis.
+
+  Faithful to the real model:
+  - interleaved local/global attention
+  - dual-frequency p-RoPE
+  - key-as-value reuse on global layers
+  - QK-norm
+
+  Divergences from the real model (real / implemented):
+  - sandwich normalization (post-attn/post-FFN norms) / pre-norm only
+  - sqrt(din) embedding scaling / unscaled embeddings
+  - tied input/output embeddings / untied (separate lm_head)
+  - per-layer embeddings (E2B/E4B) / one shared embedding table
+  - cross-layer KV-cache sharing / each layer keeps its own KV
+  - illustrative layer sizes, not any real variant's config
 """
 
 import jax
 from flax import nnx
 from jax import numpy as jnp
-from layers import (
+from nn.layers import (
   GeGLU,
   RMSNorm,
   apply_partial_rope,
@@ -24,13 +57,11 @@ from layers import (
 
 
 class GemmaAttention(nnx.Module):
-  """Grouped-query attention with Gemma-4-style partial RoPE and,
-  optionally, key/value reuse (no separate value projection).
-  """
+  """Grouped-query attention."""
 
   def __init__(
     self,
-    d_model,
+    din,
     n_heads,
     n_kv_heads,
     head_dim,
@@ -40,10 +71,10 @@ class GemmaAttention(nnx.Module):
     share_kv,
     rngs,
   ):
-    """Construct a Gemma-4 attention block.
+    """Construct a Gemma4 attention block.
 
     Args:
-      d_model: model (residual stream) dimensionality.
+      din: model (residual stream) dimensionality.
       n_heads: number of query heads.
       n_kv_heads: number of key/value heads.
       head_dim: dimensionality of each attention head.
@@ -62,18 +93,20 @@ class GemmaAttention(nnx.Module):
     self.share_kv = share_kv
     self.rotary_dim = max(2, int(rotary_fraction * head_dim) // 2 * 2)
     self.q_proj = tp_linear(
-      d_model, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
     self.k_proj = tp_linear(
-      d_model, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
     if not share_kv:
       self.v_proj = tp_linear(
-        d_model, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+        din, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
       )
     self.o_proj = tp_linear(
-      n_heads * head_dim, d_model, ("tp", "fsdp"), rngs=rngs
+      n_heads * head_dim, din, ("tp", "fsdp"), rngs=rngs
     )
+    self.q_norm = RMSNorm(head_dim, rngs=rngs)
+    self.k_norm = RMSNorm(head_dim, rngs=rngs)
     self.inv_freq = nnx.Variable(rope_freqs(self.rotary_dim, theta=theta))
 
   def __call__(
@@ -82,7 +115,7 @@ class GemmaAttention(nnx.Module):
     """Apply grouped-query self-attention.
 
     Args:
-      x: input array, shape (batch, seq, d_model).
+      x: input array, shape (batch, seq, din).
       positions: integer position ids, shape (batch, seq).
       mask: bool attention mask, shape (seq, seq), True = attend, from
         make_causal_mask.
@@ -99,9 +132,10 @@ class GemmaAttention(nnx.Module):
       else self.v_proj(x).reshape(b, s, self.n_kv_heads, self.head_dim)
     )
 
+    q = self.q_norm(q)
     q = apply_partial_rope(q, positions, self.inv_freq.value, self.rotary_dim)
     k = apply_partial_rope(
-      k_content, positions, self.inv_freq.value, self.rotary_dim
+      self.k_norm(k_content), positions, self.inv_freq.value, self.rotary_dim
     )
     k = repeat_kv(k, self.n_rep)
     v = repeat_kv(v, self.n_rep)
@@ -121,27 +155,27 @@ class GemmaAttention(nnx.Module):
 
 
 class GemmaTransformerBlock(nnx.Module):
-  """Pre-norm transformer block: GQA attention + dense GeGLU FFN."""
+  """Pre-norm transformer block."""
 
   def __init__(  # noqa: PLR0913
-    self, d_model, n_heads, n_kv_heads, head_dim, d_ff, *, is_global, rngs
+    self, din, n_heads, n_kv_heads, head_dim, dhid, *, is_global, rngs
   ):
     """Construct a Gemma transformer block.
 
     Args:
-      d_model: model (residual stream) dimensionality.
+      din: model (residual stream) dimensionality.
       n_heads: number of query heads.
       n_kv_heads: number of key/value heads.
       head_dim: dimensionality of each attention head.
-      d_ff: feed-forward hidden dimensionality.
+      dhid: feed-forward hidden dimensionality.
       is_global: whether this is a "global" (full-causal, p-RoPE,
         shared-kv) layer or a "local" (sliding-window, full-RoPE) one.
       rngs: random keys.
     """
     self.is_global = is_global
-    self.attn_norm = RMSNorm(d_model, rngs=rngs)
+    self.attn_norm = RMSNorm(din, rngs=rngs)
     self.attn = GemmaAttention(
-      d_model,
+      din,
       n_heads,
       n_kv_heads,
       head_dim,
@@ -150,8 +184,8 @@ class GemmaTransformerBlock(nnx.Module):
       share_kv=is_global,
       rngs=rngs,
     )
-    self.ffn_norm = RMSNorm(d_model, rngs=rngs)
-    self.ffn = GeGLU(d_model, d_ff, rngs=rngs)
+    self.ffn_norm = RMSNorm(din, rngs=rngs)
+    self.ffn = GeGLU(din, dhid, rngs=rngs)
 
   def __call__(
     self, x: jax.Array, positions: jax.Array, mask: jax.Array
@@ -159,7 +193,7 @@ class GemmaTransformerBlock(nnx.Module):
     """Apply the block.
 
     Args:
-      x: input array, shape (batch, seq, d_model).
+      x: input array, shape (batch, seq, din).
       positions: integer position ids, shape (batch, seq).
       mask: bool attention mask, shape (seq, seq).
 
@@ -171,25 +205,18 @@ class GemmaTransformerBlock(nnx.Module):
     return x
 
 
-class GemmaLLM(nnx.Module):
-  """Decoder-only transformer in the Gemma-4 architectural family.
-
-  Interleaves "local" (sliding-window, full-RoPE) and "global"
-  (full-causal, p-RoPE, shared-kv) attention layers -- every
-  `global_every`-th layer is global, the rest are local, matching
-  Gemma 4's actual design choice. Dense FFN only (no MoE -- that's
-  MixtralSMoE's role in this suite).
-  """
+class Gemma4(nnx.Module):
+  """Gemma4-style LM."""
 
   def __init__(  # noqa: PLR0913
     self,
     vocab_size,
-    d_model,
+    din,
     n_layers,
     n_heads,
     n_kv_heads,
     head_dim,
-    d_ff,
+    dhid,
     local_window,
     *,
     global_every=4,
@@ -199,12 +226,12 @@ class GemmaLLM(nnx.Module):
 
     Args:
       vocab_size: token vocabulary size.
-      d_model: model (residual stream) dimensionality.
+      din: model (residual stream) dimensionality.
       n_layers: number of transformer blocks.
       n_heads: number of query heads.
       n_kv_heads: number of key/value heads.
       head_dim: dimensionality of each attention head.
-      d_ff: feed-forward hidden dimensionality.
+      dhid: feed-forward hidden dimensionality.
       local_window: sliding-window size for "local" attention layers.
       global_every: every global_every-th layer (1-indexed) is a full
         causal ("global") attention layer; the rest are local.
@@ -213,7 +240,7 @@ class GemmaLLM(nnx.Module):
     self.local_window = local_window
     self.embed = nnx.Embed(
       vocab_size,
-      d_model,
+      din,
       embedding_init=nnx.with_partitioning(
         nnx.initializers.normal(), ("fsdp", None)
       ),
@@ -221,19 +248,19 @@ class GemmaLLM(nnx.Module):
     )
     self.blocks = tuple(
       GemmaTransformerBlock(
-        d_model,
+        din,
         n_heads,
         n_kv_heads,
         head_dim,
-        d_ff,
+        dhid,
         is_global=((i + 1) % global_every == 0),
         rngs=rngs,
       )
       for i in range(n_layers)
     )
-    self.final_norm = RMSNorm(d_model, rngs=rngs)
+    self.final_norm = RMSNorm(din, rngs=rngs)
     self.lm_head = nnx.Linear(
-      d_model,
+      din,
       vocab_size,
       use_bias=False,
       kernel_init=nnx.with_partitioning(
@@ -252,10 +279,7 @@ class GemmaLLM(nnx.Module):
       positions: integer position ids, shape (batch, seq).
 
     Returns:
-      a tuple (logits, aux_loss): logits has shape
-      (batch, seq, vocab_size); aux_loss is always jnp.array(0.0) (dense
-      model, no MoE) -- kept for interface uniformity with MixtralSMoE so
-      objective.py's causal_lm works unmodified across this suite.
+      a tuple of logits, aux_loss
     """
     seq_len = token_ids.shape[1]
     global_mask = make_causal_mask(seq_len)
@@ -269,7 +293,3 @@ class GemmaLLM(nnx.Module):
     hidden = self.final_norm(hidden)
     logits = self.lm_head(hidden)
     return logits, jnp.array(0.0)
-
-
-def GemmaDense(vocab_size, **kwargs):
-  return GemmaLLM(vocab_size, **kwargs)
