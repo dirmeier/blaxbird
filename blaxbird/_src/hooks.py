@@ -20,23 +20,18 @@ from flax import nnx
 def get_ema_hook(
   model: nnx.Module, decay: float = 0.999
 ) -> tuple[Callable, Callable]:
-  """Construct an exponential-moving-average-of-weights hook.
+  """Construct an exponential-moving-average hook for weights.
 
   Args:
-    model: the model whose parameter structure the EMA state is
-      initialized from (its current values seed the EMA state; the
-      model object itself is not retained or mutated).
-    decay: EMA decay rate -- ema = decay*ema + (1-decay)*current, applied
-      every step the hook is called. Higher decay tracks more slowly.
+    model: the model from which the EMA state is initialized from
+    decay: EMA decay rate
 
   Returns:
     a tuple (hook_fn, get_ema_model_fn):
-      hook_fn(step, *, model, **kwargs) -> None: updates the tracked EMA
-        state from `model`'s current parameter values. Call this every
-        step (e.g. by including it in train_fn's hooks=).
+      hook_fn(step, *, model, **kwargs) -> None: updates the weights
       get_ema_model_fn(model: nnx.Module) -> nnx.Module: returns a new,
         independent nnx.Module with the same structure as `model` but
-        with the tracked EMA parameter values.
+        with the tracked EMA parameter values
   """
   _, ema_state = nnx.split(model)
   box = {"state": ema_state}

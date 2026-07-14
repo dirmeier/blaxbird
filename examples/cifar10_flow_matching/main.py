@@ -1,10 +1,8 @@
 import argparse
 import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import dataloader
+import examples.cifar10_flow_matching.model as model
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
@@ -14,18 +12,14 @@ from absl import logging
 from flax import nnx
 from jax import random as jr
 from jax.experimental import mesh_utils
+from examples.cifar10_flow_matching.objective import rfm
 
 from blaxbird import get_default_checkpointer, train_fn
-from _common import rfm
-from _common.nn import dit  # for getattr(dit, dit_type, ...) below
 
 
 def get_optimizer(
   model, *, peak_lr=1e-4, n_steps, warmup_steps=1000, grad_clip_norm=1.0
 ):
-  # warmup_cosine_decay_schedule requires decay_steps > warmup_steps (the
-  # cosine phase runs over decay_steps - warmup_steps); clamp so a short
-  # n_steps (e.g. a smoke run) doesn't raise ValueError from optax.
   warmup_steps = min(warmup_steps, n_steps // 2)
   schedule = optax.warmup_cosine_decay_schedule(
     init_value=0.0,
@@ -114,7 +108,7 @@ def run(n_steps, eval_every_n_steps, n_eval_batches, dit_type, log_to_wandb):
     jr.key(0), os.path.join(outfolder, "data")
   )
 
-  model = getattr(dit, dit_type)(
+  model = getattr(model, dit_type)(
     image_size=(32, 32, 3), n_classes=10, rngs=nnx.rnglib.Rngs(jr.key(1))
   )
   objective = rfm()
