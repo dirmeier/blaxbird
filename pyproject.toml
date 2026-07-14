@@ -43,11 +43,11 @@ dev = [
 examples = [
     "chex",
     "einops>=0.8.1",
+    "grain",
     "matplotlib>=3.9",
     "ml-collections>=1.1.0",
-    "protobuf==3.20.3",
     "tensorflow-datasets==4.9.6",
-    "tensorflow==2.17.1",    
+    "tensorflow==2.17.1",
     "wandb>=0.21.1",
 ]
 
@@ -111,7 +111,7 @@ extend-select = [
     "TCH",  # Type-checking blocks
     "UP",   # Pyupgrade (modern syntax)
 ]
-ignore=["S101", "F841", "PLR2004", "S610", "ARG001"]
+ignore=["S101", "F841", "PLR2004", "ARG001"]
 
 [tool.ruff.lint.pydocstyle]
 convention= 'google'

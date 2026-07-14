@@ -1,13 +1,4 @@
-"""Shared primitives for the llm_reference example suite (Gemma-4-
-style, DeepSeek-V4-style, Qwen3-Next-style decoder-only transformers).
-
-TP-sharded projections use nnx.with_partitioning on their kernel_init so
-blaxbird.train_fn's mesh= argument can shard them via
-nnx.get_named_sharding -- unannotated parameters (e.g. RMSNorm weights)
-default to fully replicated. No mesh is threaded into any __call__: all
-sharding here is construction-time weight annotation only, matching this
-repo's existing sharding idiom (see examples/fsdp_tp_demo).
-"""
+"""Shared LM primitives."""
 
 import jax
 from flax import nnx
@@ -51,10 +42,7 @@ def apply_rope(
 def apply_partial_rope(
   x: jax.Array, positions: jax.Array, inv_freq: jax.Array, rotary_dim: int
 ) -> jax.Array:
-  """Apply RoPE to only the leading `rotary_dim` of the head axis,
-  leaving the remainder unrotated (Gemma-4-style "p-RoPE" on global
-  attention layers; Qwen3-Next-style partial RoPE on standard attention
-  layers).
+  """Apply RoPE to only the leading `rotary_dim` of the head axis.
 
   Args:
     x: input array, shape (batch, seq, n_heads, dim).
@@ -111,7 +99,7 @@ def make_causal_mask(seq_len: int, window: int | None = None) -> jax.Array:
 
 
 class RMSNorm(nnx.Module):
-  """Root-mean-square layer normalization (no mean-centering, no bias)."""
+  """Root-mean-square layer normalization."""
 
   def __init__(self, dim, *, rngs, eps=1e-6):
     """Construct an RMSNorm layer.
@@ -140,12 +128,12 @@ class RMSNorm(nnx.Module):
     return x * self.weight.value
 
 
-def tp_linear(d_in, d_out, partition_spec, *, rngs, use_bias=False):
-  """Construct a nnx.Linear whose kernel carries a sharding annotation.
+def tp_linear(din, dout, partition_spec, *, rngs, use_bias=False):
+  """Linear layer with sharding annotation.
 
   Args:
-    d_in: input feature dimensionality.
-    d_out: output feature dimensionality.
+    din: input feature dimensionality.
+    dout: output feature dimensionality.
     partition_spec: a 2-tuple of mesh-axis names (or None) passed to
       nnx.with_partitioning on the kernel initializer -- e.g.
       ("fsdp", "tp") for column-parallel, ("tp", "fsdp") for row-parallel.
@@ -155,15 +143,15 @@ def tp_linear(d_in, d_out, partition_spec, *, rngs, use_bias=False):
       unaffected -- same pattern as examples/fsdp_tp_demo's ShardedMLP.
     rngs: random keys.
     use_bias: whether to include a bias term. Every projection in this
-      suite uses use_bias=False, matching the real
-      Gemma/DeepSeek/Qwen3-Next architectures.
+      suite uses use_bias=False, matching the real Gemma/Qwen3-Next
+      architectures.
 
   Returns:
     a nnx.Linear with a with_partitioning-annotated kernel_init.
   """
   return nnx.Linear(
-    d_in,
-    d_out,
+    din,
+    dout,
     use_bias=use_bias,
     kernel_init=nnx.with_partitioning(
       nnx.initializers.lecun_normal(), partition_spec
@@ -173,27 +161,25 @@ def tp_linear(d_in, d_out, partition_spec, *, rngs, use_bias=False):
 
 
 class GeGLU(nnx.Module):
-  """Gated GELU MLP, TP-sharded (column-parallel gate/up, row-parallel
-  down -- same pattern as this suite's attention projections).
-  """
+  """Gated GELU MLP, TP-sharded (column-parallel gate/up, row-parallel down."""
 
-  def __init__(self, d_model, d_ff, *, rngs):
+  def __init__(self, din, dhid, *, rngs):
     """Construct a GeGLU feed-forward block.
 
     Args:
-      d_model: model (residual stream) dimensionality.
-      d_ff: hidden (expansion) dimensionality.
+      din: input/output (residual stream) dimensionality.
+      dhid: hidden (expansion) dimensionality.
       rngs: random keys.
     """
-    self.gate = tp_linear(d_model, d_ff, ("fsdp", "tp"), rngs=rngs)
-    self.up = tp_linear(d_model, d_ff, ("fsdp", "tp"), rngs=rngs)
-    self.down = tp_linear(d_ff, d_model, ("tp", "fsdp"), rngs=rngs)
+    self.gate = tp_linear(din, dhid, ("fsdp", "tp"), rngs=rngs)
+    self.up = tp_linear(din, dhid, ("fsdp", "tp"), rngs=rngs)
+    self.down = tp_linear(dhid, din, ("tp", "fsdp"), rngs=rngs)
 
   def __call__(self, x: jax.Array) -> jax.Array:
     """Apply the GeGLU transform.
 
     Args:
-      x: input array, shape (..., d_model).
+      x: input array, shape (..., din).
 
     Returns:
       jax.Array, same shape as x.

@@ -76,7 +76,7 @@ def sample(
     seq_len = tokens.shape[1]
     positions = jnp.broadcast_to(jnp.arange(seq_len), (batch, seq_len))
     logits, _ = model(tokens, positions)
-    next_logits = logits[:, -1, :]    
+    next_logits = logits[:, -1, :]
     next_token = jr.categorical(jr.fold_in(rng_key, step), next_logits, axis=-1)
     tokens = jnp.concatenate([tokens, next_token[:, None]], axis=1)
 

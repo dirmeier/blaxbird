@@ -1,79 +1,69 @@
-"""Qwen3-Next-style decoder-only transformer: linear-attention/
-Transformer hybrid + sparse MoE FFN.
+"""Qwen3Next-style LM.
 
-75% of layers are Gated DeltaNet -- a linear (constant-memory-per-step)
-recurrent attention computed via the delta rule, no softmax, no
-quadratic seq x seq score matrix -- and the remaining 25% are standard
-GQA attention with partial RoPE (leading 25% of the head) and an output
-gate. This is the axis none of this suite's other models cover: every
-other model here is quadratic self-attention throughout; Qwen3-Next
-interleaves it with a genuinely sub-quadratic sequence mixer.
+Architecture design:
+  - Attention: 3:1 linear/standard hybrid. Every linear_every-th layer
+    (1-indexed, default 4) is standard GQA attention; the other ~75% are
+    Gated DeltaNet linear-attention layers.
+    - Gated DeltaNet: linear recurrent sequence mixer via the delta rule
+      with data-dependent decay (alpha) and write-rate (beta) gates over
+      L2-normalized queries/keys; O(seq) sequential scan.
+    - standard attention: GQA with QK-norm, partial RoPE (leading 25% of
+      head_dim), and a sigmoid output gate.
+  - Positional encoding: partial RoPE on standard-attention layers;
+    DeltaNet layers are position-implicit (recurrent).
+  - Normalization: RMSNorm (no mean-centering, no bias), pre-norm, with
+    a separate norm before the mixer and FFN plus a final norm before
+    the head; QK-norm on standard-attention layers.
+  - FFN: sparse MoE -- top-k routed experts (capacity-based dispatch/
+    combine) plus one always-on shared expert; SwiGLU experts and a
+    Switch-style load-balancing aux loss.
+  - Embeddings: untied -- a separate input nnx.Embed and output lm_head.
+  - Sharding: 3D FSDP+TP+expert (routed-expert axis sharded).
 
-The Gated DeltaNet recurrence is implemented as a plain `jax.lax.scan`
-over time steps, which is O(seq_len) sequential steps -- correct and
-easy to follow, but not the real chunked/parallel-form kernel used in
-production Qwen3-Next; fine at this suite's toy sequence lengths.
-Multi-token prediction (a real Qwen3-Next feature) is out of scope
-here -- see DeepSeekV4Dense for this suite's other new-attention-
-mechanism reference instead.
+  Faithful to the real model:
+  - 3:1 Gated DeltaNet / standard-attention hybrid
+  - delta-rule recurrence with decay + write-rate gates, L2-normed Q/K
+  - output-gated, QK-normed, partial-RoPE GQA
+  - top-k routed MoE with a shared expert
+
+  Divergences from the real model (real / implemented):
+  - chunked/parallel-form DeltaNet kernel / an O(seq) sequential scan
+  - short causal Conv1D before the recurrence / q/k/v feed it directly
+  - dropless routing / Switch-style capacity dropping
+  - zero-centered RMSNorm / standard RMSNorm
+  - multi-token prediction / single next-token objective
+  - illustrative layer sizes, not any real variant's config
 """
 
 import jax
 from flax import nnx
 from jax import numpy as jnp
-from layers import RMSNorm, apply_partial_rope, repeat_kv, rope_freqs, tp_linear
+from nn.layers import RMSNorm, apply_partial_rope, repeat_kv, rope_freqs, tp_linear
 
 
 class SparseMoEFFN(nnx.Module):
-  """Top-k-routed mixture-of-experts feed-forward block with real
-  capacity-based dispatch/combine (not dense-compute-then-select).
-  Expert weights are stacked into single tensors with a leading
-  n_experts axis so that axis can be sharded across a mesh's "expert"
-  axis.
-  """
-
   def __init__(
-    self, d_model, d_ff, n_experts, n_active, *, rngs, capacity_factor=1.25
+    self, din, dhid, n_experts, n_active, *, rngs, capacity_factor=1.25
   ):
-    """Construct a sparse MoE feed-forward block.
-
-    Args:
-      d_model: model (residual stream) dimensionality.
-      d_ff: hidden (expansion) dimensionality of each expert.
-      n_experts: total number of experts.
-      n_active: number of experts activated per token (top-k).
-      rngs: random keys.
-      capacity_factor: per-expert buffer capacity multiplier. Per-expert
-        capacity = ceil(capacity_factor * n_active * n_tokens /
-        n_experts). Standard Switch-Transformer value is 1.25. Tokens
-        beyond an expert's capacity in a batch are dropped (their
-        contribution from that slot is zeroed, not misrouted).
-    """
     self.n_experts = n_experts
     self.n_active = n_active
     self.capacity_factor = capacity_factor
-    self.router = nnx.Linear(d_model, n_experts, use_bias=False, rngs=rngs)
+    self.router = nnx.Linear(din, n_experts, use_bias=False, rngs=rngs)
 
     expert_partitioning = nnx.with_partitioning(
       nnx.initializers.lecun_normal(), ("expert", None, None)
     )
     key = rngs.params()
     k1, k2, k3 = jax.random.split(key, 3)
-    self.gate = nnx.Param(expert_partitioning(k1, (n_experts, d_model, d_ff)))
-    self.up = nnx.Param(expert_partitioning(k2, (n_experts, d_model, d_ff)))
-    self.down = nnx.Param(expert_partitioning(k3, (n_experts, d_ff, d_model)))
+    self.gate = nnx.Param(expert_partitioning(k1, (n_experts, din, dhid)))
+    self.up = nnx.Param(expert_partitioning(k2, (n_experts, din, dhid)))
+    self.down = nnx.Param(expert_partitioning(k3, (n_experts, dhid, din)))
+
+    self.shared_gate = tp_linear(din, dhid, ("fsdp", "tp"), rngs=rngs)
+    self.shared_up = tp_linear(din, dhid, ("fsdp", "tp"), rngs=rngs)
+    self.shared_down = tp_linear(dhid, din, ("tp", "fsdp"), rngs=rngs)
 
   def __call__(self, x: jax.Array) -> tuple[jax.Array, jax.Array]:
-    """Route tokens to the top-k experts via capacity-based dispatch/
-    combine and combine their outputs.
-
-    Args:
-      x: input array, shape (batch, seq, d_model).
-
-    Returns:
-      a tuple (output, aux_loss): output has the same shape as x;
-      aux_loss is a scalar Switch-Transformer-style load-balancing loss.
-    """
     b, s, d = x.shape
     flat = x.reshape(b * s, d)
     n_tok = flat.shape[0]
@@ -120,6 +110,11 @@ class SparseMoEFFN(nnx.Module):
     expert_out = jnp.einsum("ecf,efd->ecd", h, self.down.value)
     combined = jnp.einsum("ecd,tec->td", expert_out, combine_weight)
 
+    shared = self.shared_down(
+      jax.nn.silu(self.shared_gate(flat)) * self.shared_up(flat)
+    )
+    combined = combined + shared
+
     density = jnp.mean(probs, axis=0)
     chosen_mask = jax.nn.one_hot(top_idx, self.n_experts).sum(axis=1)
     chosen_frac = jnp.mean(chosen_mask, axis=0)
@@ -135,24 +130,6 @@ def gated_delta_net(
   alpha: jax.Array,
   beta: jax.Array,
 ) -> jax.Array:
-  """Sequential Gated DeltaNet recurrence.
-
-  Maintains a (head_dim x head_dim) associative-memory state per head,
-  decayed each step by a data-dependent gate `alpha` and corrected
-  toward the true value via the delta rule, scaled by a data-dependent
-  write-rate `beta`: state_t = alpha_t * state_{t-1} + beta_t * (v_t -
-  state_{t-1} @ k_t) (outer) k_t. Output is state_t @ q_t.
-
-  Args:
-    q: queries, shape (batch, seq, heads, head_dim).
-    k: keys, shape (batch, seq, heads, head_dim).
-    v: values, shape (batch, seq, heads, head_dim).
-    alpha: decay gate in (0, 1), shape (batch, seq, heads).
-    beta: write-rate gate in (0, 1), shape (batch, seq, heads).
-
-  Returns:
-    jax.Array, shape (batch, seq, heads, head_dim).
-  """
   b, _, h, d = q.shape
 
   def step(state, inputs):
@@ -178,46 +155,30 @@ def gated_delta_net(
 
 
 class GatedDeltaNetLayer(nnx.Module):
-  """Linear-attention sequence mixer via the (gated) delta rule."""
-
-  def __init__(self, d_model, n_heads, head_dim, *, rngs):
-    """Construct a Gated DeltaNet layer.
-
-    Args:
-      d_model: model (residual stream) dimensionality.
-      n_heads: number of heads.
-      head_dim: dimensionality of each head.
-      rngs: random keys.
-    """
+  def __init__(self, din, n_heads, head_dim, *, rngs):
     self.n_heads = n_heads
     self.head_dim = head_dim
     self.q_proj = tp_linear(
-      d_model, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
     self.k_proj = tp_linear(
-      d_model, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
     self.v_proj = tp_linear(
-      d_model, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
-    self.gate_proj = nnx.Linear(d_model, 2 * n_heads, rngs=rngs)
+    self.gate_proj = nnx.Linear(din, 2 * n_heads, rngs=rngs)
     self.o_proj = tp_linear(
-      n_heads * head_dim, d_model, ("tp", "fsdp"), rngs=rngs
+      n_heads * head_dim, din, ("tp", "fsdp"), rngs=rngs
     )
 
   def __call__(self, x: jax.Array) -> jax.Array:
-    """Apply the Gated DeltaNet layer.
-
-    Args:
-      x: input array, shape (batch, seq, d_model).
-
-    Returns:
-      jax.Array, same shape as x.
-    """
     b, s, _ = x.shape
     q = self.q_proj(x).reshape(b, s, self.n_heads, self.head_dim)
     k = self.k_proj(x).reshape(b, s, self.n_heads, self.head_dim)
     v = self.v_proj(x).reshape(b, s, self.n_heads, self.head_dim)
+    q = q * jax.lax.rsqrt(jnp.sum(q * q, axis=-1, keepdims=True) + 1e-6)
+    k = k * jax.lax.rsqrt(jnp.sum(k * k, axis=-1, keepdims=True) + 1e-6)
     gates = jax.nn.sigmoid(self.gate_proj(x))
     alpha, beta = gates[..., : self.n_heads], gates[..., self.n_heads :]
 
@@ -226,56 +187,39 @@ class GatedDeltaNetLayer(nnx.Module):
 
 
 class Qwen3NextAttention(nnx.Module):
-  """Standard GQA attention with partial RoPE and an output gate."""
-
-  def __init__(self, d_model, n_heads, n_kv_heads, head_dim, *, rngs):
-    """Construct a standard-attention layer.
-
-    Args:
-      d_model: model (residual stream) dimensionality.
-      n_heads: number of query heads.
-      n_kv_heads: number of key/value heads.
-      head_dim: dimensionality of each attention head.
-      rngs: random keys.
-    """
+  def __init__(self, din, n_heads, n_kv_heads, head_dim, *, rngs):
     self.n_heads = n_heads
     self.n_kv_heads = n_kv_heads
     self.head_dim = head_dim
     self.n_rep = n_heads // n_kv_heads
     self.rotary_dim = max(2, head_dim // 4 // 2 * 2)
     self.q_proj = tp_linear(
-      d_model, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
     self.k_proj = tp_linear(
-      d_model, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
     self.v_proj = tp_linear(
-      d_model, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
+      din, n_kv_heads * head_dim, ("fsdp", "tp"), rngs=rngs
     )
-    self.gate_proj = nnx.Linear(d_model, n_heads * head_dim, rngs=rngs)
+    self.gate_proj = nnx.Linear(din, n_heads * head_dim, rngs=rngs)
     self.o_proj = tp_linear(
-      n_heads * head_dim, d_model, ("tp", "fsdp"), rngs=rngs
+      n_heads * head_dim, din, ("tp", "fsdp"), rngs=rngs
     )
+    self.q_norm = RMSNorm(head_dim, rngs=rngs)
+    self.k_norm = RMSNorm(head_dim, rngs=rngs)
     self.inv_freq = nnx.Variable(rope_freqs(self.rotary_dim))
 
   def __call__(
     self, x: jax.Array, positions: jax.Array, mask: jax.Array
   ) -> jax.Array:
-    """Apply gated grouped-query self-attention.
-
-    Args:
-      x: input array, shape (batch, seq, d_model).
-      positions: integer position ids, shape (batch, seq).
-      mask: bool attention mask, shape (seq, seq).
-
-    Returns:
-      jax.Array, same shape as x.
-    """
     b, s, _ = x.shape
     q = self.q_proj(x).reshape(b, s, self.n_heads, self.head_dim)
     k = self.k_proj(x).reshape(b, s, self.n_kv_heads, self.head_dim)
     v = self.v_proj(x).reshape(b, s, self.n_kv_heads, self.head_dim)
 
+    q = self.q_norm(q)
+    k = self.k_norm(k)
     q = apply_partial_rope(q, positions, self.inv_freq.value, self.rotary_dim)
     k = apply_partial_rope(k, positions, self.inv_freq.value, self.rotary_dim)
     k = repeat_kv(k, self.n_rep)
@@ -298,62 +242,32 @@ class Qwen3NextAttention(nnx.Module):
 
 
 class Qwen3NextBlock(nnx.Module):
-  """Pre-norm transformer block: Gated DeltaNet or standard attention,
-  plus a sparse MoE FFN.
-  """
-
   def __init__(  # noqa: PLR0913
     self,
-    d_model,
+    din,
     n_heads,
     n_kv_heads,
     head_dim,
-    d_ff,
+    dhid,
     n_experts,
     n_active,
     *,
     is_linear,
     rngs,
   ):
-    """Construct a Qwen3-Next transformer block.
-
-    Args:
-      d_model: model (residual stream) dimensionality.
-      n_heads: number of attention/DeltaNet heads.
-      n_kv_heads: number of key/value heads (standard-attention layers
-        only).
-      head_dim: dimensionality of each head.
-      d_ff: feed-forward hidden dimensionality of each expert.
-      n_experts: total experts.
-      n_active: active experts per token (top-k).
-      is_linear: whether this is a Gated DeltaNet layer (True, 75% of
-        layers) or a standard-attention layer (False, 25%).
-      rngs: random keys.
-    """
     self.is_linear = is_linear
-    self.attn_norm = RMSNorm(d_model, rngs=rngs)
+    self.attn_norm = RMSNorm(din, rngs=rngs)
     self.attn = (
-      GatedDeltaNetLayer(d_model, n_heads, head_dim, rngs=rngs)
+      GatedDeltaNetLayer(din, n_heads, head_dim, rngs=rngs)
       if is_linear
-      else Qwen3NextAttention(d_model, n_heads, n_kv_heads, head_dim, rngs=rngs)
+      else Qwen3NextAttention(din, n_heads, n_kv_heads, head_dim, rngs=rngs)
     )
-    self.ffn_norm = RMSNorm(d_model, rngs=rngs)
-    self.ffn = SparseMoEFFN(d_model, d_ff, n_experts, n_active, rngs=rngs)
+    self.ffn_norm = RMSNorm(din, rngs=rngs)
+    self.ffn = SparseMoEFFN(din, dhid, n_experts, n_active, rngs=rngs)
 
   def __call__(
     self, x: jax.Array, positions: jax.Array, mask: jax.Array
   ) -> tuple[jax.Array, jax.Array]:
-    """Apply the block.
-
-    Args:
-      x: input array, shape (batch, seq, d_model).
-      positions: integer position ids, shape (batch, seq).
-      mask: bool attention mask, shape (seq, seq) (standard-attention
-        layers only -- unused on Gated DeltaNet layers).
-
-    Returns:
-      a tuple (output, aux_loss): output has the same shape as x.
-    """
     normed = self.attn_norm(x)
     attn_out = (
       self.attn(normed) if self.is_linear else self.attn(normed, positions, mask)
@@ -363,21 +277,18 @@ class Qwen3NextBlock(nnx.Module):
     return x + ffn_out, aux_loss
 
 
-class Qwen3NextLLM(nnx.Module):
-  """Decoder-only transformer in the Qwen3-Next architectural family:
-  linear-attention (Gated DeltaNet) / standard-attention hybrid with a
-  sparse MoE FFN.
-  """
+class Qwen3Next(nnx.Module):
+  """Qwen3Next-style LM."""
 
   def __init__(  # noqa: PLR0913
     self,
     vocab_size,
-    d_model,
+    din,
     n_layers,
     n_heads,
     n_kv_heads,
     head_dim,
-    d_ff,
+    dhid,
     n_experts,
     n_active,
     *,
@@ -385,29 +296,10 @@ class Qwen3NextLLM(nnx.Module):
     aux_loss_coef=0.01,
     rngs,
   ):
-    """Construct a Qwen3NextLLM.
-
-    Args:
-      vocab_size: token vocabulary size.
-      d_model: model (residual stream) dimensionality.
-      n_layers: number of transformer blocks.
-      n_heads: number of attention/DeltaNet heads.
-      n_kv_heads: number of key/value heads (standard-attention layers).
-      head_dim: dimensionality of each head.
-      d_ff: feed-forward hidden dimensionality of each expert.
-      n_experts: total experts per block.
-      n_active: active experts per token (top-k) per block.
-      linear_every: every linear_every-th layer (1-indexed) is a
-        standard-attention layer; the rest are Gated DeltaNet (3:1
-        ratio at the default of 4, matching real Qwen3-Next).
-      aux_loss_coef: weight applied to each block's load-balancing
-        aux_loss before summing across blocks.
-      rngs: random keys.
-    """
     self.aux_loss_coef = aux_loss_coef
     self.embed = nnx.Embed(
       vocab_size,
-      d_model,
+      din,
       embedding_init=nnx.with_partitioning(
         nnx.initializers.normal(), ("fsdp", None)
       ),
@@ -415,11 +307,11 @@ class Qwen3NextLLM(nnx.Module):
     )
     self.blocks = tuple(
       Qwen3NextBlock(
-        d_model,
+        din,
         n_heads,
         n_kv_heads,
         head_dim,
-        d_ff,
+        dhid,
         n_experts,
         n_active,
         is_linear=((i + 1) % linear_every != 0),
@@ -427,9 +319,9 @@ class Qwen3NextLLM(nnx.Module):
       )
       for i in range(n_layers)
     )
-    self.final_norm = RMSNorm(d_model, rngs=rngs)
+    self.final_norm = RMSNorm(din, rngs=rngs)
     self.lm_head = nnx.Linear(
-      d_model,
+      din,
       vocab_size,
       use_bias=False,
       kernel_init=nnx.with_partitioning(
@@ -441,19 +333,6 @@ class Qwen3NextLLM(nnx.Module):
   def __call__(
     self, token_ids: jax.Array, positions: jax.Array
   ) -> tuple[jax.Array, jax.Array]:
-    """Compute next-token logits for a batch of token sequences.
-
-    Args:
-      token_ids: integer token ids, shape (batch, seq).
-      positions: integer position ids, shape (batch, seq).
-
-    Returns:
-      a tuple (logits, aux_loss): logits has shape
-      (batch, seq, vocab_size); aux_loss is aux_loss_coef times the
-      summed per-block load-balancing loss (standard-attention layers'
-      MoE FFNs only -- Gated DeltaNet layers still route through a
-      SparseMoEFFN, same as standard-attention layers).
-    """
     seq_len = token_ids.shape[1]
     i = jnp.arange(seq_len)[:, None]
     j = jnp.arange(seq_len)[None, :]
@@ -467,7 +346,3 @@ class Qwen3NextLLM(nnx.Module):
     hidden = self.final_norm(hidden)
     logits = self.lm_head(hidden)
     return logits, self.aux_loss_coef * total_aux_loss
-
-
-def Qwen3NextHybrid(vocab_size, **kwargs):
-  return Qwen3NextLLM(vocab_size, **kwargs)

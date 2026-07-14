@@ -1,4 +1,3 @@
-import types
 from collections.abc import Callable, Iterable
 
 import jax
@@ -6,7 +5,6 @@ from absl import logging
 from flax import nnx
 from jax import random as jr
 
-wandb: types.ModuleType | None
 try:
   import wandb
 except ImportError:
@@ -164,9 +162,7 @@ def train_fn(
             value  # type: ignore[arg-type]
           )
         # do evaluation loop
-        for val_idx, batch in zip(
-          range(n_eval_batches), val_itr, strict=False
-        ):
+        for val_idx, batch in zip(range(n_eval_batches), val_itr, strict=False):
           if mesh is not None:
             batch = jax.device_put(
               batch, jax.NamedSharding(mesh, _data_partition_spec)
