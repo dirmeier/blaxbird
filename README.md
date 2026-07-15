@@ -1,9 +1,9 @@
-# blaxbird [blækbɜːd]
+# blaxbird [blæksbɜːd]
 
 [![ci](https://github.com/dirmeier/blaxbird/actions/workflows/ci.yaml/badge.svg)](https://github.com/dirmeier/blaxbird/actions/workflows/ci.yaml)
 [![version](https://img.shields.io/pypi/v/blaxbird.svg?colorB=black&style=flat)](https://pypi.org/project/blaxbird/)
 
-> A high-level API to build and train NNX models
+> A high-level API to build and train NNX models at scale
 
 `Blaxbird` [blæksbɜːd] is a high-level API to easily build NNX models and train them on CPU or GPU.
 
@@ -12,6 +12,24 @@ Using `blaxbird` one can
 - easily define checkpointers that save the best and most current network weights,
 - distribute data and model weights over multiple processes or GPUs,
 - define hooks that are periodically called during training.
+
+> [!IMPORTANT]
+> ### 🚀 Recent additions
+> ⚡️ **Mesh-based sharding for arbitrary parallelism: FSDP, tensor, expert, or any combination thereof.** Per-parameter sharding is derived directly from a parameter's `nnx.with_partitioning` annotation over an arbitrary `jax.sharding.Mesh`. Using `blaxbird`, parallelism is as simple as building a mesh and passing it to `train_fn`:
+> ```python
+> from jax.sharding import Mesh, PartitionSpec as P
+> from jax.experimental import mesh_utils
+> from blaxbird import train_fn
+>
+> mesh = Mesh(mesh_utils.create_device_mesh((4, 2)), ("fsdp", "tp"))
+> with mesh:
+>   train = train_fn(fns=(train_step, val_step), mesh=mesh, data_partition_spec=P("fsdp"), ...)
+>   train(rng_key, optimizer, train_itr, val_itr)
+> ```
+>
+> 🔥 **Reference LLM implementations in [`examples/llm`](examples/llm/): Gemma4 🐦 and Qwen3Next 🐋.** Demonstrate how different sharding strategies of two LLMs with distinct architectural choices can be implemented:
+> - interleaved local/global attention using a 2D mesh (FSDP+TP) and
+> - gated DeltaNet with top-2-of-8 sparse mixture-of-experts using a 3D mesh (FSDP+TP+expert).
 
 ## Quickstart
 
